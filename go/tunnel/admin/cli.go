@@ -29,6 +29,10 @@ commands:
   token revoke NAME                      delete a token and disconnect its agents
   agent-cert issue --token T --out PREFIX [--days 365]
                                          write PREFIX.crt and PREFIX.key for an agent
+  gateway-key add --name N (--key "ssh-ed25519 ..." | --key-file F) --tunnels 'p1,p2'
+                                         allow a public key through the SSH gateway
+  gateway-key list
+  gateway-key remove NAME
   reservation add --name N --token T [--port P]
                                          bind a tunnel name (and port) to a token
   reservation list
@@ -58,6 +62,19 @@ func RunServerCommand(socket string, args []string, stdout, stderr io.Writer) er
 			fmt.Fprintf(stdout, "revoked token %q; disconnected %d agent session(s)\n", args[2], resp.Disconnected)
 		}
 		return err
+	case "gateway-key add":
+		return gatewayKeyAdd(c, args[2:], stdout, stderr)
+	case "gateway-key list":
+		return gatewayKeyList(c, stdout)
+	case "gateway-key remove":
+		if len(args) != 3 {
+			return fmt.Errorf("usage: gateway-key remove NAME")
+		}
+		if err := c.RemoveGatewayKey(args[2]); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "removed gateway key %q\n", args[2])
+		return nil
 	case "agent-cert issue":
 		return certIssue(c, args[2:], stdout, stderr)
 	case "reservation add":
@@ -332,4 +349,45 @@ func writeNewFile(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return f.Close()
+}
+
+func gatewayKeyAdd(c *Client, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("gateway-key add", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	name := fs.String("name", "", "key name")
+	key := fs.String("key", "", "public key (authorized_keys format)")
+	keyFile := fs.String("key-file", "", "file with the public key")
+	tunnels := fs.String("tunnels", "", "tunnel names or patterns, comma separated")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *keyFile != "" {
+		data, err := os.ReadFile(*keyFile)
+		if err != nil {
+			return err
+		}
+		*key = string(data)
+	}
+	if *name == "" || *key == "" || *tunnels == "" || fs.NArg() > 0 {
+		return fmt.Errorf("usage: gateway-key add --name N (--key K | --key-file F) --tunnels 'p1,p2'")
+	}
+	k, err := c.AddGatewayKey(GatewayKeyRequest{Name: *name, PublicKey: *key, Tunnels: splitList(*tunnels)})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "added gateway key %q (%s) for tunnels %s\n", k.Name, k.Fingerprint, strings.Join(k.Tunnels, ","))
+	return nil
+}
+
+func gatewayKeyList(c *Client, stdout io.Writer) error {
+	keys, err := c.GatewayKeys()
+	if err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "NAME\tFINGERPRINT\tTUNNELS\tCREATED")
+	for _, k := range keys {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", k.Name, k.Fingerprint, strings.Join(k.Tunnels, ","), k.Created.Format(time.RFC3339))
+	}
+	return tw.Flush()
 }

@@ -2,8 +2,13 @@ package config
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,6 +20,7 @@ import (
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 	"github.com/saichler/l8tunnel/go/tunnel/relay"
 	"github.com/saichler/l8tunnel/go/tunnel/store"
+	"golang.org/x/crypto/ssh"
 )
 
 const (
@@ -75,6 +81,14 @@ type ServerFile struct {
 		// Listen is an address such as 127.0.0.1:9100; empty disables it.
 		Listen string `yaml:"listen"`
 	} `yaml:"metrics"`
+	// SSHGateway enables the SSH jump gateway (ssh -J).
+	SSHGateway *struct {
+		// Listen is the gateway's address, e.g. ":2222".
+		Listen string `yaml:"listen"`
+		// HostKey is the gateway's private host key; empty means
+		// <storage>/gateway_host_key, generated on first start.
+		HostKey string `yaml:"host_key"`
+	} `yaml:"ssh_gateway"`
 	// OIDC enables "sign in with ..." for http tunnels.
 	OIDC *OIDCFile `yaml:"oidc"`
 	// RateLimits are per client IP; zero values mean the relay defaults.
@@ -184,6 +198,20 @@ func (f *ServerFile) NewRelay(ctx context.Context, logger *slog.Logger, st *stor
 	}
 	if len(tokens) == 0 {
 		logger.Warn("no agent tokens yet; create one with: l8tunnel-server token create --name <name>")
+	}
+	if g := f.SSHGateway; g != nil {
+		if g.Listen == "" {
+			return nil, fmt.Errorf("ssh_gateway.listen is required")
+		}
+		path := g.HostKey
+		if path == "" {
+			path = filepath.Join(f.StorageDir(), "gateway_host_key")
+		}
+		signer, err := loadOrCreateHostKey(path)
+		if err != nil {
+			return nil, fmt.Errorf("ssh_gateway.host_key: %w", err)
+		}
+		cfg.SSHGateway = &relay.GatewayConfig{Listen: g.Listen, HostKey: signer, Keys: st}
 	}
 	var login *oidc.Service
 	if f.OIDC != nil {
@@ -343,4 +371,30 @@ func (f *ServerFile) acmeStorage() string {
 		return f.ACME.Storage
 	}
 	return filepath.Join(f.StorageDir(), "acme")
+}
+
+// loadOrCreateHostKey loads an SSH host key, generating an ed25519 key
+// (mode 0600) if the file doesn't exist yet.
+func loadOrCreateHostKey(path string) (ssh.Signer, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, err
+		}
+		block, err := ssh.MarshalPrivateKey(priv, "l8tunnel gateway")
+		if err != nil {
+			return nil, err
+		}
+		data = pem.EncodeToMemory(block)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			return nil, err
+		}
+	} else if err != nil {
+		return nil, err
+	}
+	return ssh.ParsePrivateKey(data)
 }

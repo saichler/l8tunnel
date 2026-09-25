@@ -52,6 +52,11 @@ tls:
 # metrics:
 #   listen: 127.0.0.1:9100           # Prometheus metrics; empty disables
 
+# ssh_gateway:                       # ssh -J gw@tunnel.example.com:2222 user@<tunnel>
+#   listen: ":2222"
+#   # host_key: /var/lib/l8tunnel/gateway_host_key   # generated on first start
+#   # users: l8tunnel-server gateway-key add --name alice --key-file alice.pub --tunnels 'home*'
+
 # oidc:                              # "sign in with ..." for http tunnels
 #   # auth_host: auth.tunnel.example.com   # default auth.<base_domain>; register
 #   #                                      # https://<auth_host>/callback at the provider

@@ -78,6 +78,9 @@ func RelayHandler(srv *relay.Server, st *store.Store, logger *slog.Logger) http.
 	mux.HandleFunc("POST /tokens", a.createToken)
 	mux.HandleFunc("DELETE /tokens/{name}", a.revokeToken)
 	mux.HandleFunc("POST /tokens/{name}/certs", a.issueCert)
+	mux.HandleFunc("GET /gateway-keys", a.listGatewayKeys)
+	mux.HandleFunc("POST /gateway-keys", a.addGatewayKey)
+	mux.HandleFunc("DELETE /gateway-keys/{name}", a.removeGatewayKey)
 	mux.HandleFunc("GET /reservations", a.listReservations)
 	mux.HandleFunc("POST /reservations", a.addReservation)
 	mux.HandleFunc("DELETE /reservations/{name}", a.removeReservation)
@@ -249,4 +252,52 @@ func AgentHandler(a *agent.Agent) http.Handler {
 		writeJSON(w, http.StatusOK, a.Status())
 	})
 	return mux
+}
+
+// GatewayKeyRequest is the body of POST /gateway-keys.
+type GatewayKeyRequest struct {
+	Name      string   `json:"name"`
+	PublicKey string   `json:"public_key"`
+	Tunnels   []string `json:"tunnels"`
+}
+
+func (a *relayAPI) listGatewayKeys(w http.ResponseWriter, _ *http.Request) {
+	keys, err := a.st.GatewayKeys()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if keys == nil {
+		keys = []*auth.GatewayKey{}
+	}
+	writeJSON(w, http.StatusOK, keys)
+}
+
+func (a *relayAPI) addGatewayKey(w http.ResponseWriter, r *http.Request) {
+	var req GatewayKeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid request: %w", err))
+		return
+	}
+	key, err := auth.NewGatewayKey(req.Name, req.PublicKey, req.Tunnels)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := a.st.AddGatewayKey(key); err != nil {
+		writeErr(w, http.StatusConflict, err)
+		return
+	}
+	a.log.Info("gateway key added", "name", key.Name, "fingerprint", key.Fingerprint, "tunnels", key.Tunnels)
+	writeJSON(w, http.StatusCreated, key)
+}
+
+func (a *relayAPI) removeGatewayKey(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if err := a.st.DeleteGatewayKey(name); err != nil {
+		writeErr(w, statusFor(err), err)
+		return
+	}
+	a.log.Info("gateway key removed", "name", name)
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -306,3 +306,88 @@ func (s *Store) SessionKey() ([]byte, error) {
 	})
 	return key, err
 }
+
+var bucketGatewayKeys = []byte("gateway-keys") // fingerprint -> GatewayKey
+
+// AddGatewayKey stores an SSH gateway key; names and keys are unique.
+func (s *Store) AddGatewayKey(k *auth.GatewayKey) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists(bucketGatewayKeys)
+		if err != nil {
+			return err
+		}
+		if b.Get([]byte(k.Fingerprint)) != nil {
+			return fmt.Errorf("this public key is already registered")
+		}
+		dup := false
+		err = b.ForEach(func(_, v []byte) error {
+			var other auth.GatewayKey
+			if err := json.Unmarshal(v, &other); err != nil {
+				return err
+			}
+			dup = dup || other.Name == k.Name
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if dup {
+			return fmt.Errorf("a gateway key named %q already exists", k.Name)
+		}
+		return put(b, k.Fingerprint, k)
+	})
+}
+
+// GatewayKeyByFingerprint returns a key, or nil if there is none.
+func (s *Store) GatewayKeyByFingerprint(fp string) (*auth.GatewayKey, error) {
+	var k *auth.GatewayKey
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketGatewayKeys)
+		if b == nil {
+			return nil
+		}
+		if data := b.Get([]byte(fp)); data != nil {
+			k = &auth.GatewayKey{}
+			return json.Unmarshal(data, k)
+		}
+		return nil
+	})
+	return k, err
+}
+
+// GatewayKeys lists keys sorted by name.
+func (s *Store) GatewayKeys() ([]*auth.GatewayKey, error) {
+	var out []*auth.GatewayKey
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketGatewayKeys)
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(_, v []byte) error {
+			k := &auth.GatewayKey{}
+			if err := json.Unmarshal(v, k); err != nil {
+				return err
+			}
+			out = append(out, k)
+			return nil
+		})
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, err
+}
+
+// DeleteGatewayKey removes a key by name.
+func (s *Store) DeleteGatewayKey(name string) error {
+	keys, err := s.GatewayKeys()
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		if k.Name == name {
+			return s.db.Update(func(tx *bolt.Tx) error {
+				return tx.Bucket(bucketGatewayKeys).Delete([]byte(k.Fingerprint))
+			})
+		}
+	}
+	return fmt.Errorf("gateway key %q: %w", name, ErrNotFound)
+}

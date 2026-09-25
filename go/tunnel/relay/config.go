@@ -83,6 +83,8 @@ type Config struct {
 	DisableForwardedHeaders bool
 	// AccessLog logs every HTTP tunnel request.
 	AccessLog bool
+	// SSHGateway enables the SSH jump gateway; nil disables it.
+	SSHGateway *GatewayConfig
 	// Login is the OIDC login service; nil when none is configured. Its
 	// auth host's label can't be used as a tunnel name.
 	Login LoginService
@@ -193,6 +195,9 @@ func (c *Config) validate() error {
 	}
 	if c.RateLimits.AuthFailuresPerMinute == 0 {
 		c.RateLimits.AuthFailuresPerMinute = DefaultAuthFailuresPerMinute
+	}
+	if g := c.SSHGateway; g != nil && (g.Listen == "" || g.HostKey == nil || g.Keys == nil) {
+		return fmt.Errorf("relay: the SSH gateway needs Listen, HostKey and Keys")
 	}
 	if c.Logger == nil {
 		c.Logger = slog.Default()

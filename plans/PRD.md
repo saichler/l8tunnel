@@ -122,7 +122,7 @@ SSH carries no hostname (no SNI or Host header), so routing needs a different ap
 |---|---|---|---|
 | **A. Dedicated port** | `ssh -p 22001 user@tunnel.example.com` | Zero client setup. Any SSH client works. | Uses one public port per tunnel. Some networks block uncommon ports. |
 | **B. SNI over TLS (ProxyCommand)** | `~/.ssh/config`: `ProxyCommand l8tunnel connect %h` → `ssh homebox.tunnel.example.com` | Everything goes over port 443 and gets past strict egress firewalls. One port for everything. | Needs the small `l8tunnel` helper on the client (or `openssl s_client` as a fallback). |
-| **C. SSH jump gateway** (v1.1) | `ssh -J gw@tunnel.example.com user@homebox` | Standard OpenSSH `-J`. No extra binary. | The relay runs an SSH server; it needs gateway keys and user management. |
+| **C. SSH jump gateway** (v1.1 Q4) | `ssh -J gw@tunnel.example.com:2222 user@homebox` | Standard OpenSSH `-J`. No extra binary. | The relay runs a forward-only SSH server (`ssh_gateway`): public-key users managed with `l8tunnel-server gateway-key add --tunnels ...`, `direct-tcpip` to tunnel names only (port 22 or the tunnel's port), no shells, tunnel IP lists apply, access-token tunnels need an explicit grant. |
 
 | ID | Requirement |
 |---|---|

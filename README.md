@@ -92,6 +92,14 @@ Host *.tunnel.example.com
     ProxyCommand l8tunnel connect %h
 ```
 
+Or, with no helper at all, through the relay's SSH jump gateway
+(`ssh_gateway: {listen: ":2222"}` in `server.yaml`):
+
+```bash
+l8tunnel-server gateway-key add --name alice --key-file alice.pub --tunnels 'home*'
+ssh -J gw@tunnel.example.com:2222 user@homebox
+```
+
 `l8tunnel connect` only needs outbound port 443 and honors `HTTPS_PROXY`.
 Without it installed, `ProxyCommand openssl s_client -quiet -connect %h:443
 -servername %h` works too (not for tunnels with an access token).

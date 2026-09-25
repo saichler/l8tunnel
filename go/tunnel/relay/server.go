@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/httpproxy"
 	"github.com/saichler/l8tunnel/go/tunnel/transport"
@@ -33,14 +35,16 @@ type Server struct {
 	wsServer   *http.Server
 	wsListener *transport.ConnListener
 
-	mu         sync.Mutex
-	listener   net.Listener
-	httpServer *http.Server
-	httpAddr   string
-	httpsPort  int
-	sessions   map[*agentSession]struct{}
-	closed     bool
-	wg         sync.WaitGroup
+	mu           sync.Mutex
+	listener     net.Listener
+	httpServer   *http.Server
+	httpAddr     string
+	gatewayLn    net.Listener
+	gatewayConns map[*ssh.ServerConn]struct{}
+	httpsPort    int
+	sessions     map[*agentSession]struct{}
+	closed       bool
+	wg           sync.WaitGroup
 }
 
 // New validates cfg and returns a relay that isn't listening yet.
@@ -55,6 +59,7 @@ func New(cfg Config) (*Server, error) {
 		registry:     newRegistry(cfg.NameGracePeriod),
 		routes:       newRouteConfigs(cfg.TLS, cfg.AgentCA),
 		sessions:     map[*agentSession]struct{}{},
+		gatewayConns: map[*ssh.ServerConn]struct{}{},
 		connLimit:    auth.NewIPLimiter(rl.ConnectionsPerSecond, rl.ConnectionsBurst),
 		authFailures: auth.NewIPLimiter(float64(rl.AuthFailuresPerMinute)/60, rl.AuthFailuresPerMinute),
 	}
@@ -114,6 +119,22 @@ func (s *Server) Start() error {
 		}()
 	}
 
+	if g := s.cfg.SSHGateway; g != nil {
+		gln, err := net.Listen("tcp", g.Listen)
+		if err != nil {
+			ln.Close()
+			if s.httpServer != nil {
+				s.httpServer.Close()
+			}
+			return fmt.Errorf("relay: SSH gateway listen on %s: %w", g.Listen, err)
+		}
+		s.gatewayLn = gln
+		s.wg.Add(1)
+		go s.acceptGateway(gln, s.gatewaySSHConfig())
+		s.log.Info("SSH gateway listening", "addr", gln.Addr().String(),
+			"host_key", ssh.FingerprintSHA256(g.HostKey.PublicKey()))
+	}
+
 	s.listener = ln
 	s.log.Info("relay listening", "version", s.cfg.Version, "tls", ln.Addr().String(), "http", s.httpAddr,
 		"control_sni", s.cfg.ControlSNI, "base_domain", s.cfg.BaseDomain,
@@ -131,6 +152,17 @@ func (s *Server) Addr() net.Addr {
 		return nil
 	}
 	return s.listener.Addr()
+}
+
+// GatewayAddr returns the SSH gateway's address, or "" when it is
+// disabled or before Start.
+func (s *Server) GatewayAddr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.gatewayLn == nil {
+		return ""
+	}
+	return s.gatewayLn.Addr().String()
 }
 
 // HTTPAddr returns the plain HTTP listener's address, or "" when it is
@@ -163,6 +195,12 @@ func (s *Server) Close() error {
 	}
 	if s.httpServer != nil {
 		s.httpServer.Close()
+	}
+	if s.gatewayLn != nil {
+		s.gatewayLn.Close()
+	}
+	for c := range s.gatewayConns {
+		c.Close()
 	}
 	for sess := range s.sessions {
 		sess.mux.Close()

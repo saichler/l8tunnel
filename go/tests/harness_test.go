@@ -19,6 +19,7 @@ import (
 	"github.com/saichler/l8tunnel/go/tunnel/store"
 	"github.com/saichler/l8tunnel/go/tunnel/transport"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/crypto/ssh"
 )
 
 const (
@@ -53,6 +54,7 @@ type relayOpts struct {
 	accessLog        bool
 	logger           *slog.Logger  // nil: testLogger()
 	login            *oidc.Service // OIDC login service, bound after start
+	gateway          ssh.Signer    // enables the SSH gateway with this host key
 	store            *store.Store  // reused across restarts
 }
 
@@ -127,6 +129,7 @@ func startRelayWith(t testing.TB, opts relayOpts) *relayEnv {
 		RateLimits:              limits,
 		AccessLog:               opts.accessLog,
 		Login:                   loginService(opts.login),
+		SSHGateway:              gatewayConfig(opts),
 		BindHost:                "127.0.0.1",
 		TCPPortMin:              opts.portMin,
 		TCPPortMax:              opts.portMax,
@@ -146,6 +149,13 @@ func startRelayWith(t testing.TB, opts relayOpts) *relayEnv {
 	}
 	return &relayEnv{srv: srv, opts: opts, pki: opts.pki, store: opts.store, addr: srv.Addr().String(),
 		portMin: opts.portMin, portMax: opts.portMax}
+}
+
+func gatewayConfig(opts relayOpts) *relay.GatewayConfig {
+	if opts.gateway == nil {
+		return nil
+	}
+	return &relay.GatewayConfig{Listen: "127.0.0.1:0", HostKey: opts.gateway, Keys: opts.store}
 }
 
 // loginService keeps a nil *oidc.Service a nil interface.

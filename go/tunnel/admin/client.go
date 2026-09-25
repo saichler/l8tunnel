@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/saichler/l8tunnel/go/tunnel/agent"
+	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/relay"
 )
 
@@ -108,6 +109,25 @@ func (c *Client) IssueCert(token string, days int) (IssueCertResponse, error) {
 	var resp IssueCertResponse
 	err := c.do("POST", "/tokens/"+url.PathEscape(token)+"/certs", IssueCertRequest{Days: days}, &resp)
 	return resp, err
+}
+
+// AddGatewayKey registers an SSH gateway key.
+func (c *Client) AddGatewayKey(req GatewayKeyRequest) (auth.GatewayKey, error) {
+	var k auth.GatewayKey
+	err := c.do("POST", "/gateway-keys", req, &k)
+	return k, err
+}
+
+// GatewayKeys lists SSH gateway keys.
+func (c *Client) GatewayKeys() ([]auth.GatewayKey, error) {
+	var out []auth.GatewayKey
+	err := c.do("GET", "/gateway-keys", nil, &out)
+	return out, err
+}
+
+// RemoveGatewayKey removes an SSH gateway key.
+func (c *Client) RemoveGatewayKey(name string) error {
+	return c.do("DELETE", "/gateway-keys/"+url.PathEscape(name), nil, nil)
 }
 
 // Reserve adds a permanent reservation.
