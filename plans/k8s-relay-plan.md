@@ -158,7 +158,7 @@ stale table costs one extra hop and never fails a connection.
 |---|---|---|
 | `RELAY` | L4: writes a PROXY v2 header, then passes the raw bytes through | Everything handled by relays |
 | `PASSTHROUGH` | L4 to the route's backend pool. The PROXY v2 header is optional per route, because not every backend understands it | Sites that serve their own valid certificate |
-| `TERMINATE` | Terminates TLS with the route's certificate (a mounted Secret), then reverse-proxies HTTP/1.1, h2 and WebSocket to the pool over https or http. Sets `X-Forwarded-For/Proto/Host` | Sites whose backends use self-signed certificates. This is what `l8web/go/web/proxy` does today; see §9 |
+| `TERMINATE` | Terminates TLS with the route's certificate (a mounted Secret), then reverse-proxies HTTP/1.1, h2 and WebSocket to the pool over https or http. Sets `X-Forwarded-For/Proto/Host`. Built on l8tunnel's existing `httpproxy` and `certs` packages (§3.7) | Sites whose backends use self-signed certificates. This is what `l8web/go/web/proxy` does today; see §9 |
 
 ### 3.4 Load balancing and health
 
@@ -208,6 +208,46 @@ stale table costs one extra hop and never fails a connection.
 - Every few seconds the edge reports its status and backend health as an
   `EdgeNode` record, and it serves `/healthz`, `/readyz` and Prometheus
   `/metrics`: connections, bytes and dial failures per route and member.
+
+### 3.7 Implementation: reuse, don't port
+
+The TERMINATE mode is assembled from l8tunnel's existing, tested packages,
+not ported from `l8web/go/web/proxy` (the assessment is in §9, item 5).
+
+- **`httpproxy`: the HTTP engine, unchanged.**
+  - Its `Tunnel` interface (`ID()`, `OpenStream(ctx, clientAddr)`,
+    `Access()`) is the seam. The edge's `edge/pool.go` implements it once
+    per TERMINATE route:
+    - `OpenStream` picks a healthy member with the route's LB algorithm and
+      dials it, over TLS for https backends.
+    - Dial failures mark the member suspect and try the next one (§3.4).
+    - `Access()` returns the route's IP lists.
+  - `LookupFunc` maps the Host to the route's pool.
+  - The edge then gets, with no new code:
+    - HTTP/1.1 and h2 on the client side
+    - streaming without buffering (`FlushInterval: -1`)
+    - WebSocket upgrades through the standard reverse proxy
+    - forwarded headers, with incoming `X-Forwarded-*` dropped
+    - connection reuse per route (one `http.Transport` per pool)
+    - access logs and the relay's error pages
+- **Two small additions to `httpproxy`:**
+  1. The error handler maps "no healthy member" to 503. Other upstream
+     failures stay 502.
+  2. An `UpstreamTLS` option per `Tunnel`, where `verify` is the default.
+     `skip-verify` must be set explicitly on the route (for self-signed
+     backends) and is shown as a warning in the UI.
+- **One addition to `certs`: `ModeStaticSet`.** It loads a set of static
+  certificates **once**, keyed by domain, including wildcards, and selects
+  them by SNI. It reloads when a mounted Secret file changes (an mtime check
+  every 30 s).
+  - An unknown SNI gets a handshake failure. It never falls back to another
+    domain's certificate.
+  - The relay's existing `ModeStatic` and ACME modes are untouched.
+- **Also reused:** `tunnel/sni` (K0) for peeking at the connection and
+  `tunnel/pipe` for L4 copying.
+- **New code in `tunnel/edge`:** listeners, route resolution, pools and
+  health checks, the PROXY v2 writer, the route cache and `EdgeNode`
+  reporting.
 
 ## 4. Relay cluster mode
 
@@ -751,7 +791,8 @@ unchanged. Phase K7 checks this with the **already-built** agent packages
 | 2 | `tunnel/pipe` (bidirectional copy with half-close) | Edge L4 forwarding and relay-to-relay forwarding | Reuse as is |
 | 3 | `tunnel/relay/registry.go` (claim, park, reserve, ports, domains, grace) | `TunLive.Before()` enforces the same rules cluster-wide | **K0:** move the pure rules (conflict checks, port allocation, max_tunnels, grace math) into `tunnel/registry` functions that take state as arguments; the in-memory registry and the `TunLive` callback both call them |
 | 4 | `tunnel/store` (bbolt) and the admin API validation | The ORM callbacks validate the same objects | **K0:** keep validation in `auth` (policy, names, domain patterns, gateway grants); the admin API and the callbacks call it. The bbolt store becomes the standalone `relay.Accounts` |
-| 5 | `l8web/go/web/proxy`: an SNI-based TLS-terminating reverse proxy with hardcoded routes and `InsecureSkipVerify` to https backends | The edge TERMINATE mode covers the same job | Not reused: it lacks L4 passthrough, PROXY v2, dynamic routes, pools and health checks, and it lives in a framework repo (FrameworkInterfaceBoundaries). The edge replaces it on k8s-node-2 for any site moved into EdgeRoutes; l8web itself isn't changed. Flagged to the framework owner as a candidate to retire later |
+| 5 | `l8web/go/web/proxy` (about 440 lines): an SNI-based TLS-terminating reverse proxy | The edge TERMINATE mode covers the same job | **Assessed for porting (2026-09-25); not ported.** Findings:<br>• It only terminates TLS: no L4 passthrough, which RELAY and PASSTHROUGH need.<br>• One backend per domain (`NODE_IP:port`): no pools, health checks or retries.<br>• Routes are hardcoded in Go.<br>• It re-reads certificate files on every handshake, and unknown SNIs get the first route's certificate.<br>• Its catch-all handler builds a new proxy and transport per request, so there's no connection reuse.<br>• HTTP/1.1 only, with `InsecureSkipVerify` always on and no `X-Forwarded-*` headers.<br>• A hand-rolled WebSocket forwarder that ignores errors (the standard reverse proxy handles upgrades).<br>• No timeouts, a log line per request, and 502 for unknown hosts.<br>l8tunnel's `httpproxy` and `certs` already do this job better (§3.7), so reusing them is less work than porting and fixing.<br>**Taken from it:** its Kubernetes manifest (`proxy.yaml`, a hostNetwork DaemonSet) as a reference for the edge YAML, and its domain → port table as the seed list if the other sites move onto the edge (§12).<br>l8web itself isn't changed (FrameworkInterfaceBoundaries). It's flagged to the framework owner as a candidate to retire once the edge carries those sites |
+| 5a | `tunnel/httpproxy` and `tunnel/certs` (the relay's HTTP termination and certificates) | The edge TERMINATE mode | **Reused (§3.7):** the edge pool implements `httpproxy.Tunnel`. Additions: 503 for no healthy member, `UpstreamTLS`, and `certs.ModeStaticSet`. No copy of either package |
 | 6 | Relay HTML error pages (`httpproxy/pages.go`) | The edge's 503 "no healthy backend" page | The edge imports `httpproxy`'s page renderer |
 | 7 | The request inspector UI (plain HTML, agent-side) | None: the agent's local tool, not the management app | Out of scope, unchanged |
 | 8 | l8ui sections (UI) | 10 sections of config-only files | Data only; custom behavior limited to two show-once handlers sharing one `sections/tun-show-once.js` helper (desktop, plus its mobile twin) |
@@ -808,7 +849,10 @@ when you ask.
 **K3 — Edge**
 
 - `tunnel/edge`: listeners, route resolution (§3.2), modes RELAY,
-  PASSTHROUGH and TERMINATE.
+  PASSTHROUGH and TERMINATE. TERMINATE is built on `httpproxy` through
+  `edge/pool.go` implementing `httpproxy.Tunnel` (§3.7).
+- `httpproxy` additions (503 for no healthy member, `UpstreamTLS`) and
+  `certs.ModeStaticSet`, with the relay's existing tests still green.
 - Pools, LB algorithms, active and passive health, and retry before the
   first byte.
 - PROXY v2 writer, per-IP rate limits and route IP lists.
@@ -851,6 +895,9 @@ when you ask.
   - PROXY client IP reaching the IP lists and `X-Forwarded-For`
   - HMAC spoof refusal
   - the edge TERMINATE and PASSTHROUGH pools with health ejection
+  - TERMINATE: h2 and WebSocket through the edge, connection reuse to the
+    backend, upstream certificates verified by default, unknown SNI
+    refused, and certificate reload after a Secret change
   - management-plane-down resilience
   - registry restart: re-announce, no dropped tunnels, and claims resuming
   - simulated records never routed to
@@ -916,6 +963,7 @@ Platforms:
 | 20 | §3.1 | Edge listeners 443/80/port range/gateway | Go-edge | K3 |
 | 21 | §3.2 | Route resolution order, stale-table fallback | Go-edge | K3 |
 | 22 | §3.3 | RELAY, PASSTHROUGH, TERMINATE modes | Go-edge | K3 |
+| 22a | §3.7 | TERMINATE on `httpproxy` (pool as `httpproxy.Tunnel`); `httpproxy` 503 and `UpstreamTLS`; `certs.ModeStaticSet` | Go-edge, Go-relay | K3 |
 | 23 | §3.4 | Pools, LB algorithms, active and passive health, retry | Go-edge | K3 |
 | 24 | §3.5 | PROXY v2 writer, edge rate limits, route IP lists | Go-edge | K3 |
 | 25 | §3.6 | Route cache, bootstrap config, EdgeNode reporting, metrics | Go-edge | K3 |
