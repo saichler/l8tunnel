@@ -4,7 +4,8 @@
 #
 # Usage: secrets.sh <kubectl context> [agent-ca-dir]
 #   agent-ca-dir holds ca.crt and ca.key (for example the files
-#   "l8tunnel-server export" wrote); without it a new CA is generated.
+#   "l8tunnel-server export" wrote) and replaces the Secret. Without it a
+#   new CA is generated, but only when there is no Secret yet.
 set -e
 CONTEXT="$1"
 CA_DIR="$2"
@@ -16,6 +17,12 @@ KUBECTL=(kubectl --context "$CONTEXT")
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+if [ -z "$CA_DIR" ] && "${KUBECTL[@]}" -n l8tunnel get secret l8tunnel-agent-ca >/dev/null 2>&1; then
+  # Never replace an existing CA by accident: every agent certificate it
+  # signed would stop working. Pass a directory to replace it on purpose.
+  echo "Secret l8tunnel-agent-ca already exists; keeping it."
+  exit 0
+fi
 if [ -z "$CA_DIR" ]; then
   echo "Generating a new agent CA..."
   openssl ecparam -name prime256v1 -genkey -noout -out "$TMP/ca.key"
