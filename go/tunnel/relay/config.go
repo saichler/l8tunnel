@@ -110,6 +110,9 @@ type Config struct {
 	AgentCA *x509.Certificate
 	// Reservations are loaded at start; more can be added with Reserve.
 	Reservations []PermanentReservation
+	// ReservedNames can't be used as tunnel names, e.g. "www" when
+	// www.<base-domain> is a website hosted elsewhere.
+	ReservedNames []string
 	// RateLimits are per client IP.
 	RateLimits RateLimits
 	// PublicHost is the host name reported in mode A public addresses;
@@ -140,6 +143,11 @@ func (c *Config) validate() error {
 	}
 	if c.PublicHTTPSPort < 0 || c.PublicHTTPSPort > 65535 {
 		return fmt.Errorf("relay: invalid PublicHTTPSPort %d", c.PublicHTTPSPort)
+	}
+	for _, n := range c.ReservedNames {
+		if !namePattern.MatchString(n) {
+			return fmt.Errorf("relay: reserved name %q must be a lowercase DNS label", n)
+		}
 	}
 	if c.CanServeHost == nil {
 		certs := c.TLS.Certificates

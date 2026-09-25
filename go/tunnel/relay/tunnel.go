@@ -72,7 +72,7 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 			"token %q may not use the tunnel name %q", sess.token.Name, name)
 	}
 	hostname := name + "." + s.cfg.BaseDomain
-	if hostname == s.cfg.ControlSNI || (s.cfg.Login != nil && hostname == s.cfg.Login.AuthHost()) {
+	if hostname == s.cfg.ControlSNI || (s.cfg.Login != nil && hostname == s.cfg.Login.AuthHost()) || s.isReservedName(name) {
 		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST,
 			"tunnel name %q is reserved for the relay", name)
 	}
@@ -331,4 +331,13 @@ func (t *tunnel) close() {
 		}
 		t.server.http.Forget(t.ID())
 	})
+}
+
+func (s *Server) isReservedName(name string) bool {
+	for _, n := range s.cfg.ReservedNames {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }

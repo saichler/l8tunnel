@@ -72,7 +72,7 @@ func (s *Server) Reserve(name, tokenID string, port int) error {
 	if !namePattern.MatchString(name) {
 		return fmt.Errorf("tunnel name %q must be a lowercase DNS label", name)
 	}
-	if name+"."+s.cfg.BaseDomain == s.cfg.ControlSNI {
+	if name+"."+s.cfg.BaseDomain == s.cfg.ControlSNI || s.isReservedName(name) {
 		return fmt.Errorf("tunnel name %q is reserved for the relay", name)
 	}
 	if port != 0 && (port < s.cfg.TCPPortMin || port > s.cfg.TCPPortMax) {

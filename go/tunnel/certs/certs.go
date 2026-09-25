@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/caddyserver/certmagic"
 
@@ -88,6 +89,10 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 		if err != nil {
 			return nil, fmt.Errorf("tls: %w", err)
 		}
+		if time.Now().After(leaf.NotAfter) {
+			return nil, fmt.Errorf("tls: the certificate %s expired on %s", cfg.CertFile, leaf.NotAfter.Format(time.RFC3339))
+		}
+		go watchExpiry(ctx, leaf, cfg.CertFile, cfg.Logger)
 		return &Manager{tls: tlsCfg, canServe: func(host string) error {
 			if leaf.VerifyHostname(host) != nil {
 				return fmt.Errorf("the relay's certificate (tls.cert) doesn't cover %s", host)
@@ -300,4 +305,39 @@ func (m *Manager) hostAllowed(host string) bool {
 	allow := m.allowHost
 	m.mu.Unlock()
 	return allow != nil && allow(host)
+}
+
+// ExpiryWarning is how long before a static certificate expires the relay
+// starts warning, daily, in its log.
+const ExpiryWarning = 21 * 24 * time.Hour
+
+// watchExpiry logs a warning daily once a static certificate is within
+// ExpiryWarning of expiring, and an error once it has expired. Static
+// certificates don't renew themselves.
+func watchExpiry(ctx context.Context, leaf *x509.Certificate, file string, logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	check := func() {
+		left := time.Until(leaf.NotAfter)
+		switch {
+		case left <= 0:
+			logger.Error("the TLS certificate has expired; clients are refusing connections: replace it and restart",
+				"file", file, "expired", leaf.NotAfter.Format(time.RFC3339))
+		case left < ExpiryWarning:
+			logger.Warn("the TLS certificate expires soon: renew it and restart the relay",
+				"file", file, "expires", leaf.NotAfter.Format(time.RFC3339), "days_left", int(left.Hours()/24))
+		}
+	}
+	check()
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			check()
+		}
+	}
 }

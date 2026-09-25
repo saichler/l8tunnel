@@ -1,0 +1,33 @@
+# /etc/l8tunnel/server.yaml: l8tunnel relay for probler.dev
+#
+# DNS at Porkbun:
+#   *.probler.dev          A  <this machine's public IP>   (tunnels and connect.probler.dev)
+#   probler.dev, www       keep their existing records (explicit records win over the wildcard)
+#
+# Full reference: deploy/examples/server.yaml in the l8tunnel repository.
+
+base_domain: probler.dev
+# control_sni: connect.probler.dev     # default: agents connect here
+
+# www.probler.dev is the website, hosted elsewhere: no tunnel may take it.
+reserved_names: [www]
+
+listen:
+  https: ":443"          # agents and every tunnel's HTTPS/TLS traffic
+  http: ":80"            # redirects to HTTPS
+
+tcp_port_range: "22000-22999"   # one public port per ssh/tcp tunnel (mode A)
+
+# Installed by install-cert.sh (Porkbun bundle: domain.cert.pem / private.key.pem).
+tls:
+  cert: /etc/l8tunnel/tls/fullchain.pem
+  key: /etc/l8tunnel/tls/privkey.pem
+
+log:
+  format: text           # or json
+  level: info
+
+# Optional:
+# ssh_gateway: {listen: ":2222"}        # ssh -J gw@probler.dev:2222 user@<tunnel>
+# metrics: {listen: "127.0.0.1:9100"}   # Prometheus
+# access_log: true                      # one line per HTTP tunnel request

@@ -38,6 +38,9 @@ type ServerFile struct {
 	// ControlSNI is the host agents connect to; empty means
 	// connect.<base_domain>.
 	ControlSNI string `yaml:"control_sni"`
+	// ReservedNames can't be tunnel names (e.g. www when the website is
+	// hosted elsewhere).
+	ReservedNames []string `yaml:"reserved_names"`
 	// PublicHost is used in mode A addresses; empty means base_domain.
 	PublicHost string `yaml:"public_host"`
 	Listen     struct {
@@ -286,7 +289,7 @@ func (f *ServerFile) certsConfig(cfg relay.Config, logger *slog.Logger) (certs.C
 	case f.TLS != nil && f.ACME != nil:
 		return certs.Config{}, fmt.Errorf("set either tls (certificate files) or acme, not both")
 	case f.TLS != nil:
-		return certs.Config{Mode: certs.ModeStatic, CertFile: f.TLS.Cert, KeyFile: f.TLS.Key}, nil
+		return certs.Config{Mode: certs.ModeStatic, CertFile: f.TLS.Cert, KeyFile: f.TLS.Key, Logger: logger}, nil
 	case f.ACME == nil:
 		return certs.Config{}, fmt.Errorf("either tls (certificate files) or acme is required")
 	}
@@ -356,6 +359,7 @@ func (f *ServerFile) relayConfig(logger *slog.Logger) (relay.Config, error) {
 			AuthFailuresPerMinute: f.RateLimits.AuthFailuresPerMinute,
 		},
 		PublicHost:        f.PublicHost,
+		ReservedNames:     f.ReservedNames,
 		BindHost:          f.Bind,
 		TCPPortMin:        portMin,
 		TCPPortMax:        portMax,

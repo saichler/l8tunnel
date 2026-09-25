@@ -55,6 +55,7 @@ type relayOpts struct {
 	logger           *slog.Logger  // nil: testLogger()
 	login            *oidc.Service // OIDC login service, bound after start
 	gateway          ssh.Signer    // enables the SSH gateway with this host key
+	reserved         []string      // reserved tunnel names
 	store            *store.Store  // reused across restarts
 }
 
@@ -130,6 +131,7 @@ func startRelayWith(t testing.TB, opts relayOpts) *relayEnv {
 		AccessLog:               opts.accessLog,
 		Login:                   loginService(opts.login),
 		SSHGateway:              gatewayConfig(opts),
+		ReservedNames:           opts.reserved,
 		BindHost:                "127.0.0.1",
 		TCPPortMin:              opts.portMin,
 		TCPPortMax:              opts.portMax,

@@ -7,6 +7,7 @@
 base_domain: tunnel.example.com
 # control_sni: connect.tunnel.example.com   # default: connect.<base_domain>
 # public_host: tunnel.example.com           # default: base_domain (mode A addresses)
+# reserved_names: [www]                     # names no tunnel may take (e.g. a website hosted elsewhere)
 
 listen:
   https: ":443"          # agents + every tunnel's SNI traffic

@@ -172,6 +172,19 @@ l8tunnel-agent status               # the agent's connection and tunnels
   certificates). The admin socket is `/run/l8tunnel/admin.sock` (mode
   0600: run admin commands as root or the `l8tunnel` user).
 
+## Install package (systemd)
+
+```bash
+./packaging/build-relay.sh amd64      # dist/l8tunnel-server-<version>-linux-amd64.tar.gz
+```
+
+On the relay machine: unpack it and run `sudo ./install.sh --cert domain.cert.pem --key private.key.pem`.
+It creates the `l8tunnel` user, installs the binary, config and systemd
+unit, installs the certificate (never part of the package), and starts the
+service. `install-cert.sh` renews the certificate; `uninstall.sh [--purge]`
+removes it. The packaged `server.yaml` is preset for probler.dev: edit
+`packaging/relay/server.yaml` for another domain.
+
 ## Docker
 
 ```bash
