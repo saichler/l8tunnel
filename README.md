@@ -75,6 +75,11 @@ For a permanent setup, use `deploy/examples/agent.yaml` and
 | `ssh` | port from `tcp_port_range`, and `<name>.<base>:443` via `l8tunnel connect` | Target defaults to `127.0.0.1:22` |
 | `tcp` | same as `ssh` | Any TCP service (RDP, databases, ...) |
 
+**Custom domains:** point `app.example.com` at the relay with a CNAME,
+allow it on the token (`l8tunnel-server token create --name t --domains
+'*.example.com'`), and add `domains: [app.example.com]` to an http or tls
+tunnel. With ACME the relay gets its certificate on first use.
+
 A disconnected agent's names and ports stay reserved for its token for 5
 minutes, so URLs survive restarts; `l8tunnel-server reservation add` makes
 that permanent.

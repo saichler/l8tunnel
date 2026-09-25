@@ -136,8 +136,7 @@ func (s *Server) serveConn(raw *net.TCPConn) {
 		return
 	}
 
-	name := s.tunnelName(sni)
-	t, typ, _ := s.registry.lookup(name)
+	t, typ, name := s.resolveHost(sni)
 	switch {
 	case t != nil && !t.access.AllowsIP(remoteIP(raw.RemoteAddr())) && typ != l8tunnel.TunnelType_TUNNEL_TYPE_HTTP:
 		s.counters.rejectedIP.Add(1)
@@ -185,23 +184,50 @@ func (s *Server) reject(conn *prefixConn, log *slog.Logger, why string) {
 	tls.Server(conn, s.routes.reject).HandshakeContext(ctx)
 }
 
-// lookupHTTP resolves a tunnel name for the HTTP proxy.
-func (s *Server) lookupHTTP(name string) (httpproxy.Tunnel, httpproxy.State) {
-	t, typ, found := s.registry.lookup(name)
-	switch {
-	case !found || typ != l8tunnel.TunnelType_TUNNEL_TYPE_HTTP:
-		return nil, httpproxy.StateUnknown
-	case t == nil:
-		return nil, httpproxy.StateOffline
+// resolveHost maps an SNI or Host name to its tunnel. name is the
+// reservation's name ("" when host is neither <name>.<base-domain> nor a
+// reserved custom domain); t is nil while the reservation is parked or
+// when <name> isn't reserved.
+func (s *Server) resolveHost(host string) (t *tunnel, typ l8tunnel.TunnelType, name string) {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if name = s.tunnelName(host); name != "" {
+		t, typ, _ = s.registry.lookup(name)
+		return t, typ, name
 	}
-	return t, httpproxy.StateActive
+	t, typ, name, _ = s.registry.lookupDomain(host)
+	return t, typ, name
+}
+
+// lookupHTTP resolves a host for the HTTP proxy.
+func (s *Server) lookupHTTP(host string) (httpproxy.Tunnel, httpproxy.State, string) {
+	t, typ, name := s.resolveHost(host)
+	_, _, found := s.registry.lookup(name)
+	switch {
+	case name == "":
+		return nil, httpproxy.StateUnknown, ""
+	case !found || typ != l8tunnel.TunnelType_TUNNEL_TYPE_HTTP:
+		return nil, httpproxy.StateUnknown, name
+	case t == nil:
+		return nil, httpproxy.StateOffline, name
+	}
+	return t, httpproxy.StateActive, name
 }
 
 // IsTunnelHost reports whether host is <name>.<base-domain> for a reserved
-// tunnel name. It is the policy for on-demand ACME certificates.
+// name, or a reserved custom domain. It is the policy for on-demand ACME
+// certificates.
 func (s *Server) IsTunnelHost(host string) bool {
-	_, _, found := s.registry.lookup(s.tunnelName(strings.ToLower(strings.TrimSuffix(host, "."))))
+	_, _, name := s.resolveHost(host)
+	_, _, found := s.registry.lookup(name)
 	return found
+}
+
+// peerCert is the client certificate of a TLS connection, if any.
+func peerCert(cs tls.ConnectionState) *x509.Certificate {
+	if len(cs.PeerCertificates) == 0 {
+		return nil
+	}
+	return cs.PeerCertificates[0]
 }
 
 // serveTokenTunnel serves mode B for a tunnel that requires an access
@@ -239,12 +265,4 @@ func (s *Server) serveTokenTunnel(t *tunnel, hello *tls.ClientHelloInfo, conn *p
 	}
 	tconn.SetReadDeadline(time.Time{})
 	t.forward(tconn, conn.RemoteAddr().String())
-}
-
-// peerCert is the client certificate of a TLS connection, if any.
-func peerCert(cs tls.ConnectionState) *x509.Certificate {
-	if len(cs.PeerCertificates) == 0 {
-		return nil
-	}
-	return cs.PeerCertificates[0]
 }

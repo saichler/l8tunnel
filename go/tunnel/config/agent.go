@@ -55,6 +55,8 @@ type TunnelFile struct {
 	BasicAuth []BasicAuthUser `yaml:"basic_auth"`
 	// AccessToken (tcp/ssh) may be written as ${ENV_VAR}.
 	AccessToken string `yaml:"access_token"`
+	// Domains are custom domains (http/tls) pointed at the relay by CNAME.
+	Domains []string `yaml:"domains"`
 }
 
 // BasicAuthUser is one basic_auth entry.
@@ -129,6 +131,7 @@ func (f *AgentFile) AgentConfig(logger *slog.Logger, version string) (agent.Conf
 			DenyIPs:            t.DenyIPs,
 			BasicUsers:         users,
 			AccessToken:        accessToken,
+			Domains:            t.Domains,
 		})
 	}
 	return agent.Config{

@@ -41,14 +41,14 @@ type Tunnel interface {
 	Access() *auth.Access
 }
 
-// LookupFunc resolves a tunnel name. The Tunnel is nil unless the state is
-// StateActive.
-type LookupFunc func(name string) (Tunnel, State)
+// LookupFunc resolves a host name (lowercase, no port). The Tunnel is nil
+// unless the state is StateActive. name identifies the tunnel the host
+// belongs to ("" for a host the relay doesn't serve); two hosts of the
+// same tunnel return the same name.
+type LookupFunc func(host string) (tun Tunnel, state State, name string)
 
 // Config configures a Proxy.
 type Config struct {
-	// BaseDomain: tunnel "app" is served for Host app.<BaseDomain>.
-	BaseDomain string
 	// ForwardedHeaders adds X-Forwarded-For/-Host/-Proto to proxied
 	// requests. Incoming X-Forwarded-* headers are always dropped.
 	ForwardedHeaders bool
@@ -77,7 +77,6 @@ type tunnelProxy struct {
 
 // New starts a Proxy. Hand it connections with ServeConn.
 func New(cfg Config) *Proxy {
-	cfg.BaseDomain = strings.ToLower(cfg.BaseDomain)
 	p := &Proxy{
 		cfg:      cfg,
 		log:      cfg.Logger,
@@ -129,18 +128,19 @@ func (p *Proxy) Close() error {
 
 // ServeHTTP routes a request by its Host header.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	name := p.tunnelName(r.Host)
+	tun, state, name := p.cfg.Lookup(normalizeHost(r.Host))
 	if name == "" {
 		writeError(w, http.StatusNotFound, errUnknownHost, r.Host)
 		return
 	}
 	// The TLS certificate was chosen for the SNI name; serving a different
 	// tunnel's Host on that connection would bypass per-host policy.
-	if r.TLS != nil && p.tunnelName(r.TLS.ServerName) != name {
-		writeError(w, http.StatusMisdirectedRequest, errMisdirected, r.Host)
-		return
+	if r.TLS != nil {
+		if _, _, sniName := p.cfg.Lookup(normalizeHost(r.TLS.ServerName)); sniName != name {
+			writeError(w, http.StatusMisdirectedRequest, errMisdirected, r.Host)
+			return
+		}
 	}
-	tun, state := p.cfg.Lookup(name)
 	switch state {
 	case StateActive:
 		if !authorize(w, r, tun.Access()) {
@@ -175,18 +175,13 @@ func authorize(w http.ResponseWriter, r *http.Request, access *auth.Access) bool
 	return true
 }
 
-// tunnelName returns the tunnel name of <name>.<base-domain>[:port], or ""
-// for any other host.
-func (p *Proxy) tunnelName(host string) string {
+// normalizeHost lowercases a Host header value and drops its port and
+// trailing dot.
+func normalizeHost(host string) string {
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
-	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	name, ok := strings.CutSuffix(host, "."+p.cfg.BaseDomain)
-	if !ok || name == "" || strings.Contains(name, ".") {
-		return ""
-	}
-	return name
+	return strings.ToLower(strings.TrimSuffix(host, "."))
 }
 
 func (p *Proxy) proxyFor(tun Tunnel) *tunnelProxy {

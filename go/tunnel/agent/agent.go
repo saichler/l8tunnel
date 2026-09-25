@@ -147,6 +147,9 @@ func (a *Agent) setEndpoints(endpoints []*l8tunnel.Endpoint) error {
 func (a *Agent) logEndpoint(ep *l8tunnel.Endpoint, target string) {
 	args := []interface{}{"name", ep.GetName(), "type", ep.GetType().String(), "target", target,
 		"public", ep.GetPublicAddress(), "hostname", ep.GetHostname()}
+	if len(ep.GetDomains()) > 0 {
+		args = append(args, "domains", ep.GetDomains())
+	}
 	if ep.GetType() == l8tunnel.TunnelType_TUNNEL_TYPE_SSH {
 		args = append(args, "ssh_mode_a", fmt.Sprintf("ssh -p %d <user>@%s", ep.GetPublicPort(), hostOf(ep.GetPublicAddress())),
 			"ssh_mode_b", "ssh -o ProxyCommand='l8tunnel connect %h' <user>@"+ep.GetHostname())

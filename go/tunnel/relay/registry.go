@@ -24,6 +24,7 @@ type reservation struct {
 	tokenID   string
 	agentID   string
 	port      int           // TCP/SSH only
+	domains   []string      // custom domains (HTTP/TLS)
 	permanent bool          // operator reservation; never expires
 	session   *agentSession // nil while parked
 	tunnel    *tunnel       // nil while parked
@@ -33,15 +34,16 @@ type reservation struct {
 
 // registry tracks the tunnel names and public ports in use on the relay.
 type registry struct {
-	mu     sync.Mutex
-	grace  time.Duration
-	names  map[string]*reservation
-	ports  map[int]struct{}
-	closed bool
+	mu      sync.Mutex
+	grace   time.Duration
+	names   map[string]*reservation
+	domains map[string]*reservation // custom domain -> reservation
+	ports   map[int]struct{}
+	closed  bool
 }
 
 func newRegistry(grace time.Duration) *registry {
-	return &registry{grace: grace, names: map[string]*reservation{}, ports: map[int]struct{}{}}
+	return &registry{grace: grace, names: map[string]*reservation{}, domains: map[string]*reservation{}, ports: map[int]struct{}{}}
 }
 
 var (
@@ -168,6 +170,49 @@ func (r *registry) deleteLocked(res *reservation) {
 	if res.port != 0 {
 		delete(r.ports, res.port)
 	}
+	for _, d := range res.domains {
+		if r.domains[d] == res {
+			delete(r.domains, d)
+		}
+	}
+}
+
+// errDomainTaken names the custom domain another reservation holds.
+type errDomainTaken struct{ domain string }
+
+func (e errDomainTaken) Error() string { return "domain " + e.domain + " is taken" }
+
+// setDomains replaces res's custom domains, all or nothing.
+func (r *registry) setDomains(res *reservation, domains []string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, d := range domains {
+		if holder := r.domains[d]; holder != nil && holder != res {
+			return errDomainTaken{d}
+		}
+	}
+	for _, d := range res.domains {
+		if r.domains[d] == res {
+			delete(r.domains, d)
+		}
+	}
+	res.domains = append([]string(nil), domains...)
+	for _, d := range domains {
+		r.domains[d] = res
+	}
+	return nil
+}
+
+// lookupDomain resolves a custom domain like lookup does a name, and also
+// returns the reservation's name.
+func (r *registry) lookupDomain(domain string) (t *tunnel, typ l8tunnel.TunnelType, name string, found bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	res := r.domains[domain]
+	if res == nil {
+		return nil, l8tunnel.TunnelType_TUNNEL_TYPE_UNSPECIFIED, "", false
+	}
+	return res.tunnel, res.typ, res.name, true
 }
 
 // reserve makes name a permanent reservation of tokenID. An existing

@@ -57,6 +57,7 @@ message TunnelSpec {
   TunnelType type = 2;
   uint32 public_port = 3; // TCP/SSH only; 0 = allocate from the relay's range
   AccessPolicy access = 4;
+  repeated string domains = 5; // HTTP/TLS only: custom domains (CNAME to the relay)
 }
 
 // AccessPolicy restricts who can use a tunnel; the relay enforces it.
@@ -84,6 +85,7 @@ message Endpoint {
   string public_address = 4; // mode A: <public_host>:<public_port>
   uint32 public_port = 5;
   string hostname = 6;       // mode B: TLS SNI host, <name>.<base_domain>
+  repeated string domains = 7; // custom domains served by this tunnel
 }
 
 message Registered {

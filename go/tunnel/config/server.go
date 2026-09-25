@@ -191,6 +191,7 @@ func (f *ServerFile) RelayConfig(ctx context.Context, logger *slog.Logger) (rela
 	}
 	cfg.TLS = mgr.TLSConfig()
 	cfg.HTTPChallenge = mgr.HTTPChallenge
+	cfg.CanServeHost = mgr.CanServe
 	return cfg, mgr, nil
 }
 

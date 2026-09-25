@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/saichler/l8tunnel/go/tunnel/auth"
+	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 	"github.com/saichler/l8tunnel/go/tunnel/transport"
 	"github.com/saichler/l8tunnel/go/types/l8tunnel"
 )
@@ -44,6 +45,9 @@ type TunnelConfig struct {
 	AllowIPs, DenyIPs []string
 	// BasicUsers require HTTP basic auth at the relay (HTTP tunnels only).
 	BasicUsers []BasicUser
+	// Domains are custom domains (CNAME to the relay) this tunnel also
+	// serves; HTTP/TLS only, and the token's policy must allow them.
+	Domains []string
 	// AccessToken requires mode B clients to present this token
 	// ("l8tunnel connect --access-token"); TCP/SSH only, and the tunnel
 	// then has no mode A port. Only its SHA-256 is sent to the relay.
@@ -147,6 +151,14 @@ func (c *Config) validate() error {
 		}
 		if _, err := auth.ValidateSpecAccess(t.Type, t.PublicPort, t.accessPolicy()); err != nil {
 			return fmt.Errorf("agent: tunnel %q: %w", t.Name, err)
+		}
+		if len(t.Domains) > 0 && t.Type != l8tunnel.TunnelType_TUNNEL_TYPE_HTTP && t.Type != l8tunnel.TunnelType_TUNNEL_TYPE_TLS {
+			return fmt.Errorf("agent: tunnel %q: custom domains apply only to http and tls tunnels", t.Name)
+		}
+		for _, d := range t.Domains {
+			if _, err := protocol.NormalizeDomain(d); err != nil {
+				return fmt.Errorf("agent: tunnel %q: %w", t.Name, err)
+			}
 		}
 		if _, _, err := net.SplitHostPort(t.Target); err != nil {
 			return fmt.Errorf("agent: tunnel %q: target %q must be host:port", t.Name, t.Target)

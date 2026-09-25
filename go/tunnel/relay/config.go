@@ -81,6 +81,10 @@ type Config struct {
 	// TLS is the relay's server TLS config (see transport.ServerTLSConfig).
 	// Its certificates must cover ControlSNI and *.BaseDomain.
 	TLS *tls.Config
+	// CanServeHost reports whether the relay can present a certificate for
+	// a custom domain (certs.Manager.CanServe). Nil means: check the static
+	// certificates in TLS.
+	CanServeHost func(host string) error
 	// BaseDomain is the parent domain of tunnel host names: tunnel "db" is
 	// reachable by SNI as db.<BaseDomain>.
 	BaseDomain string
@@ -124,6 +128,20 @@ func (c *Config) validate() error {
 	}
 	if c.PublicHTTPSPort < 0 || c.PublicHTTPSPort > 65535 {
 		return fmt.Errorf("relay: invalid PublicHTTPSPort %d", c.PublicHTTPSPort)
+	}
+	if c.CanServeHost == nil {
+		certs := c.TLS.Certificates
+		c.CanServeHost = func(host string) error {
+			for _, cert := range certs {
+				if cert.Leaf != nil && cert.Leaf.VerifyHostname(host) == nil {
+					return nil
+				}
+				if leaf, err := x509.ParseCertificate(cert.Certificate[0]); err == nil && leaf.VerifyHostname(host) == nil {
+					return nil
+				}
+			}
+			return fmt.Errorf("the relay's certificate doesn't cover %s", host)
+		}
 	}
 	if c.HTTPChallenge == nil {
 		c.HTTPChallenge = func(next http.Handler) http.Handler { return next }

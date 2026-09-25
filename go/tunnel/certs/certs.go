@@ -67,7 +67,8 @@ type Config struct {
 // Manager serves the relay's certificates.
 type Manager struct {
 	tls       *tls.Config
-	issuer    *certmagic.ACMEIssuer // nil in ModeStatic
+	issuer    *certmagic.ACMEIssuer // answers HTTP-01; nil when nothing uses it
+	canServe  func(host string) error
 	mu        sync.Mutex
 	allowHost func(host string) bool
 }
@@ -83,7 +84,16 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 		if err != nil {
 			return nil, fmt.Errorf("tls: %w", err)
 		}
-		return &Manager{tls: tlsCfg}, nil
+		leaf, err := x509.ParseCertificate(tlsCfg.Certificates[0].Certificate[0])
+		if err != nil {
+			return nil, fmt.Errorf("tls: %w", err)
+		}
+		return &Manager{tls: tlsCfg, canServe: func(host string) error {
+			if leaf.VerifyHostname(host) != nil {
+				return fmt.Errorf("the relay's certificate (tls.cert) doesn't cover %s", host)
+			}
+			return nil
+		}}, nil
 	case ModeDNS01, ModeHTTP01:
 		return newACME(ctx, cfg)
 	}
@@ -99,8 +109,6 @@ func newACME(ctx context.Context, cfg Config) (*Manager, error) {
 		return nil, fmt.Errorf("certs: BaseDomain and ControlSNI are required")
 	}
 	var provider certmagic.DNSProvider
-	var challengeHost string
-	var challengePort int
 	switch cfg.Mode {
 	case ModeDNS01:
 		p, err := newDNSProvider(cfg.DNSProvider, cfg.DNSCredentials)
@@ -112,14 +120,12 @@ func newACME(ctx context.Context, cfg Config) (*Manager, error) {
 		if cfg.DNSProvider != "" || len(cfg.DNSCredentials) > 0 {
 			return nil, fmt.Errorf("acme.dns_provider and acme.dns_credentials apply only to mode %s", ModeDNS01)
 		}
-		host, port, err := net.SplitHostPort(cfg.HTTPListenAddr)
-		if err != nil {
-			return nil, fmt.Errorf("acme.mode %s needs the port 80 listener (listen.http): %w", ModeHTTP01, err)
-		}
-		if challengePort, err = strconv.Atoi(port); err != nil || challengePort == 0 {
-			return nil, fmt.Errorf("listen.http %q needs a fixed port for acme.mode %s", cfg.HTTPListenAddr, ModeHTTP01)
-		}
-		challengeHost = host
+	}
+	// HTTP-01 is served on the relay's port 80 listener: required for
+	// http01, and enables custom domains in dns01.
+	challengeHost, challengePort, httpErr := parseChallengeAddr(cfg.HTTPListenAddr)
+	if cfg.Mode == ModeHTTP01 && httpErr != nil {
+		return nil, fmt.Errorf("acme.mode %s: %w", ModeHTTP01, httpErr)
 	}
 	var roots *x509.CertPool
 	if cfg.CARootFile != "" {
@@ -141,30 +147,54 @@ func newACME(ctx context.Context, cfg Config) (*Manager, error) {
 
 	logger := newZapLogger(cfg.Logger.With("component", "acme"))
 	m := &Manager{}
-	var magic *certmagic.Config
+	underBase := func(name string) bool {
+		return name == cfg.ControlSNI || name == "*."+cfg.BaseDomain || coveredByWildcard(name, cfg.BaseDomain)
+	}
+	// Two configs can share the cache: magic for the relay's own names, and
+	// in dns01 mode custom for custom domains (HTTP-01 on demand).
+	var magic, custom *certmagic.Config
 	cache := certmagic.NewCache(certmagic.CacheOptions{
-		GetConfigForCert: func(certmagic.Certificate) (*certmagic.Config, error) { return magic, nil },
-		Logger:           logger,
+		GetConfigForCert: func(c certmagic.Certificate) (*certmagic.Config, error) {
+			for _, n := range c.Names {
+				if custom != nil && !underBase(n) {
+					return custom, nil
+				}
+			}
+			return magic, nil
+		},
+		Logger: logger,
 	})
-	magic = certmagic.New(cache, certmagic.Config{
-		Storage: &certmagic.FileStorage{Path: cfg.Storage},
-		Logger:  logger,
-	})
-	issuer := certmagic.ACMEIssuer{
-		CA:                      cfg.CA,
-		Email:                   cfg.Email,
-		Agreed:                  true,
-		DisableTLSALPNChallenge: true,
-		ListenHost:              challengeHost,
-		AltHTTPPort:             challengePort,
-		TrustedRoots:            roots,
-		Logger:                  logger,
+	storage := &certmagic.FileStorage{Path: cfg.Storage}
+	newIssuer := func() certmagic.ACMEIssuer {
+		return certmagic.ACMEIssuer{
+			CA:                      cfg.CA,
+			Email:                   cfg.Email,
+			Agreed:                  true,
+			DisableTLSALPNChallenge: true,
+			ListenHost:              challengeHost,
+			AltHTTPPort:             challengePort,
+			TrustedRoots:            roots,
+			Logger:                  logger,
+		}
+	}
+	// Tunnel hosts get certificates on demand, but only for names a tunnel
+	// has reserved, so strangers can't make the relay request certificates
+	// for arbitrary names.
+	onDemand := &certmagic.OnDemandConfig{
+		DecisionFunc: func(_ context.Context, name string) error {
+			if m.hostAllowed(name) {
+				return nil
+			}
+			return fmt.Errorf("no tunnel reserves %q", name)
+		},
 	}
 
+	magic = certmagic.New(cache, certmagic.Config{Storage: storage, Logger: logger})
+	baseIssuer := newIssuer()
 	var names []string
 	if cfg.Mode == ModeDNS01 {
-		issuer.DisableHTTPChallenge = true
-		issuer.DNS01Solver = &certmagic.DNS01Solver{DNSManager: certmagic.DNSManager{DNSProvider: provider}}
+		baseIssuer.DisableHTTPChallenge = true
+		baseIssuer.DNS01Solver = &certmagic.DNS01Solver{DNSManager: certmagic.DNSManager{DNSProvider: provider}}
 		names = []string{"*." + cfg.BaseDomain}
 		if !coveredByWildcard(cfg.ControlSNI, cfg.BaseDomain) {
 			names = append(names, cfg.ControlSNI)
@@ -172,8 +202,8 @@ func newACME(ctx context.Context, cfg Config) (*Manager, error) {
 	} else {
 		names = []string{cfg.ControlSNI}
 	}
-	m.issuer = certmagic.NewACMEIssuer(magic, issuer)
-	magic.Issuers = []certmagic.Issuer{m.issuer}
+	iss := certmagic.NewACMEIssuer(magic, baseIssuer)
+	magic.Issuers = []certmagic.Issuer{iss}
 
 	// ManageSync must run before OnDemand is set: with OnDemand set,
 	// certmagic only allowlists the names and defers obtaining them to the
@@ -182,17 +212,20 @@ func newACME(ctx context.Context, cfg Config) (*Manager, error) {
 		cache.Stop()
 		return nil, fmt.Errorf("obtain certificates for %s from %s: %w", strings.Join(names, ", "), cfg.CA, err)
 	}
-	if cfg.Mode == ModeHTTP01 {
-		// Tunnel hosts get certificates on demand, but only for names a
-		// tunnel has reserved, so strangers can't make the relay request
-		// certificates for arbitrary names.
-		magic.OnDemand = &certmagic.OnDemandConfig{
-			DecisionFunc: func(_ context.Context, name string) error {
-				if m.hostAllowed(name) {
-					return nil
-				}
-				return fmt.Errorf("no tunnel reserves %q", name)
-			},
+
+	switch {
+	case cfg.Mode == ModeHTTP01:
+		magic.OnDemand = onDemand
+		m.issuer = iss
+		m.canServe = func(string) error { return nil }
+	case httpErr == nil:
+		custom = certmagic.New(cache, certmagic.Config{Storage: storage, Logger: logger, OnDemand: onDemand})
+		m.issuer = certmagic.NewACMEIssuer(custom, newIssuer())
+		custom.Issuers = []certmagic.Issuer{m.issuer}
+		m.canServe = func(string) error { return nil }
+	default:
+		m.canServe = func(host string) error {
+			return fmt.Errorf("custom domains with acme.mode %s need listen.http for HTTP-01 (%v)", ModeDNS01, httpErr)
 		}
 	}
 	go func() {
@@ -200,9 +233,31 @@ func newACME(ctx context.Context, cfg Config) (*Manager, error) {
 		cache.Stop()
 	}()
 
-	base := magic.TLSConfig()
-	m.tls = &tls.Config{GetCertificate: base.GetCertificate, MinVersion: tls.VersionTLS12}
+	baseGet := magic.TLSConfig().GetCertificate
+	var customGet func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+	if custom != nil {
+		customGet = custom.TLSConfig().GetCertificate
+	}
+	m.tls = &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		if customGet != nil && !underBase(strings.ToLower(hello.ServerName)) {
+			return customGet(hello)
+		}
+		return baseGet(hello)
+	}}
 	return m, nil
+}
+
+// parseChallengeAddr checks listen.http is usable for HTTP-01.
+func parseChallengeAddr(addr string) (string, int, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", 0, fmt.Errorf("needs the port 80 listener (listen.http): %w", err)
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil || p == 0 {
+		return "", 0, fmt.Errorf("listen.http %q needs a fixed port", addr)
+	}
+	return host, p, nil
 }
 
 // coveredByWildcard reports whether *.base covers name (one label deep).
@@ -224,6 +279,12 @@ func (m *Manager) HTTPChallenge(next http.Handler) http.Handler {
 		return next
 	}
 	return m.issuer.HTTPChallengeHandler(next)
+}
+
+// CanServe reports whether the manager can present a certificate for a
+// custom domain (relay.Config.CanServeHost).
+func (m *Manager) CanServe(host string) error {
+	return m.canServe(host)
 }
 
 // AllowHosts sets the policy for on-demand certificates (mode http01):

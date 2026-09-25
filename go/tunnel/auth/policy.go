@@ -3,6 +3,7 @@ package auth
 import (
 	"fmt"
 	"path"
+	"strings"
 
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 )
@@ -23,6 +24,9 @@ type Policy struct {
 	// RequireCert refuses agents that don't present one of the token's
 	// client certificates (the token string alone isn't enough).
 	RequireCert bool `json:"require_cert,omitempty"`
+	// Domains are path.Match patterns for custom domains the token's
+	// tunnels may serve, e.g. "*.example.com"; empty allows none.
+	Domains []string `json:"domains,omitempty"`
 }
 
 // Validate checks the policy's patterns, types and port range.
@@ -35,6 +39,11 @@ func (p Policy) Validate() error {
 	for _, typ := range p.Types {
 		if _, err := protocol.ParseTunnelType(typ); err != nil {
 			return err
+		}
+	}
+	for _, pattern := range p.Domains {
+		if _, err := path.Match(pattern, ""); err != nil || pattern != strings.ToLower(pattern) {
+			return fmt.Errorf("invalid domain pattern %q (lowercase path.Match pattern)", pattern)
 		}
 	}
 	if p.MaxTunnels < 0 {
@@ -55,6 +64,17 @@ func (p Policy) AllowsName(name string) bool {
 	}
 	for _, pattern := range p.Names {
 		if ok, _ := path.Match(pattern, name); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// AllowsDomain reports whether the policy allows a custom domain. Unlike
+// names, an empty list allows nothing: custom domains are opt-in.
+func (p Policy) AllowsDomain(domain string) bool {
+	for _, pattern := range p.Domains {
+		if ok, _ := path.Match(pattern, domain); ok {
 			return true
 		}
 	}

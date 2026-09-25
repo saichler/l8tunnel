@@ -131,6 +131,7 @@ func (a *Agent) handshake(control *transport.Stream) (time.Duration, error) {
 	for i, t := range a.cfg.Tunnels {
 		specs = append(specs, &l8tunnel.TunnelSpec{
 			Name: a.requestedName(i), Type: t.Type, PublicPort: t.PublicPort, Access: t.accessPolicy(),
+			Domains: t.Domains,
 		})
 	}
 	reply, err = exchange(control, &l8tunnel.ControlMessage{Body: &l8tunnel.ControlMessage_Register{

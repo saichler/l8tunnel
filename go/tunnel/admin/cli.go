@@ -24,6 +24,7 @@ commands:
       --max-tunnels N  maximum connected tunnels
       --ports A-B      allowed tcp/ssh public ports
       --require-cert   agents must present a client certificate
+      --domains p1,p2  custom domains the token may serve (patterns like *.example.com)
   token list                             list tokens (never their secrets)
   token revoke NAME                      delete a token and disconnect its agents
   agent-cert issue --token T --out PREFIX [--days 365]
@@ -96,6 +97,7 @@ func tokenCreate(c *Client, args []string, stdout, stderr io.Writer) error {
 	maxTunnels := fs.Int("max-tunnels", 0, "maximum connected tunnels")
 	ports := fs.String("ports", "", "allowed tcp/ssh public ports, A-B")
 	requireCert := fs.Bool("require-cert", false, "agents must present a client certificate")
+	domains := fs.String("domains", "", "allowed custom domains, comma separated")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -104,7 +106,7 @@ func tokenCreate(c *Client, args []string, stdout, stderr io.Writer) error {
 	}
 	resp, err := c.CreateToken(CreateTokenRequest{Name: *name, Policy: auth.Policy{
 		Names: splitList(*names), Types: splitList(*types), MaxTunnels: *maxTunnels, Ports: *ports,
-		RequireCert: *requireCert,
+		RequireCert: *requireCert, Domains: splitList(*domains),
 	}})
 	if err != nil {
 		return err
@@ -129,6 +131,9 @@ func policyString(p auth.Policy) string {
 	}
 	if p.RequireCert {
 		parts = append(parts, "require-cert")
+	}
+	if len(p.Domains) > 0 {
+		parts = append(parts, "domains="+strings.Join(p.Domains, ","))
 	}
 	if len(parts) == 0 {
 		return "any"

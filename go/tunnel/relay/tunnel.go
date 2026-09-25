@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,6 +76,10 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST,
 			"tunnel name %q is reserved for the relay", name)
 	}
+	domains, err := s.checkDomains(sess, typ, spec)
+	if err != nil {
+		return nil, err
+	}
 	res, existed, err := s.registry.claim(name, typ, sess.token.ID, sess.agentID, sess, policy.MaxTunnels)
 	switch {
 	case errors.Is(err, errMaxTunnels):
@@ -82,6 +87,10 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 			"token %q may have at most %d tunnels", sess.token.Name, policy.MaxTunnels)
 	case err != nil:
 		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_NAME_TAKEN, "tunnel name %q is taken", name)
+	}
+	if err := s.registry.setDomains(res, domains); err != nil {
+		s.registry.rollback(res, sess, existed)
+		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_NAME_TAKEN, "%v", err)
 	}
 
 	t := &tunnel{
@@ -95,6 +104,7 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 			Name:     name,
 			Type:     typ,
 			Hostname: hostname,
+			Domains:  domains,
 		},
 	}
 	switch {
@@ -114,6 +124,46 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 	}
 	s.registry.activate(res, t)
 	return t, nil
+}
+
+// checkDomains validates a spec's custom domains: HTTP/TLS tunnels only,
+// allowed by the token's policy, not under the base domain, and (for HTTP,
+// where the relay terminates TLS) coverable by the relay's certificates.
+func (s *Server) checkDomains(sess *agentSession, typ l8tunnel.TunnelType, spec *l8tunnel.TunnelSpec) ([]string, error) {
+	if len(spec.GetDomains()) == 0 {
+		return nil, nil
+	}
+	invalid := func(format string, args ...interface{}) error {
+		return remoteErr(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST, format, args...)
+	}
+	if typ != l8tunnel.TunnelType_TUNNEL_TYPE_HTTP && typ != l8tunnel.TunnelType_TUNNEL_TYPE_TLS {
+		return nil, invalid("custom domains apply only to http and tls tunnels")
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, raw := range spec.GetDomains() {
+		d, err := protocol.NormalizeDomain(raw)
+		if err != nil {
+			return nil, invalid("%v", err)
+		}
+		if d == s.cfg.BaseDomain || strings.HasSuffix(d, "."+s.cfg.BaseDomain) || d == s.cfg.ControlSNI {
+			return nil, invalid("domain %s is under the relay's base domain; use the tunnel name instead", d)
+		}
+		if !sess.token.Policy.AllowsDomain(d) {
+			return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_FORBIDDEN,
+				"token %q may not serve the domain %s", sess.token.Name, d)
+		}
+		if typ == l8tunnel.TunnelType_TUNNEL_TYPE_HTTP {
+			if err := s.cfg.CanServeHost(d); err != nil {
+				return nil, invalid("domain %s: %v", d, err)
+			}
+		}
+		if !seen[d] {
+			seen[d] = true
+			out = append(out, d)
+		}
+	}
+	return out, nil
 }
 
 // checkAccess parses a spec's access policy and checks it fits the type.

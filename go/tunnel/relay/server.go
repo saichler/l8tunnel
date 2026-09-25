@@ -66,7 +66,6 @@ func New(cfg Config) (*Server, error) {
 	s.wsServer, s.wsListener = s.newWebSocketServer()
 	go s.wsServer.Serve(s.wsListener) // returns when Close closes the listener
 	s.http = httpproxy.New(httpproxy.Config{
-		BaseDomain:       cfg.BaseDomain,
 		ForwardedHeaders: !cfg.DisableForwardedHeaders,
 		AccessLog:        cfg.AccessLog,
 		Lookup:           s.lookupHTTP,

@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -51,4 +52,22 @@ func ParsePortRange(s string) (int, int, error) {
 		return 0, 0, fmt.Errorf("invalid port range %q", s)
 	}
 	return first, last, nil
+}
+
+var dnsLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// NormalizeDomain lowercases a domain name, drops a trailing dot, and
+// checks it is a valid host name with at least two labels (no wildcards).
+func NormalizeDomain(s string) (string, error) {
+	d := strings.ToLower(strings.TrimSuffix(s, "."))
+	labels := strings.Split(d, ".")
+	if len(d) > 253 || len(labels) < 2 {
+		return "", fmt.Errorf("domain %q must be a host name such as app.example.com", s)
+	}
+	for _, l := range labels {
+		if !dnsLabel.MatchString(l) {
+			return "", fmt.Errorf("domain %q is not a valid host name", s)
+		}
+	}
+	return d, nil
 }

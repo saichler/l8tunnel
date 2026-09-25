@@ -37,6 +37,7 @@ tunnel flags:
   --basic-auth user:hash   require HTTP basic auth, http only (repeatable; hash from
                            "l8tunnel hash-password")
   --access-token T         mode B clients must present T (tcp/ssh only; no mode A port)
+  --domain D               also serve custom domain D, CNAME'd to the relay (http/tls; repeatable)
 
 A bare port as the target means 127.0.0.1:<port>. ssh defaults to 127.0.0.1:22.
 http tunnels are served at https://<name>.<base-domain>; an https:// target makes
@@ -116,6 +117,7 @@ func parseTunnelArgs(typ string, args []string, stderr io.Writer) (TunnelFile, e
 	var basic stringList
 	fs.Var(&basic, "basic-auth", "")
 	fs.StringVar(&t.AccessToken, "access-token", "", "")
+	fs.Var((*stringList)(&t.Domains), "domain", "")
 	port := fs.Uint("port", 0, "")
 	if err := fs.Parse(args); err != nil {
 		return t, err
