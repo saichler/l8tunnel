@@ -157,6 +157,13 @@ func (a *Agent) logEndpoint(ep *l8tunnel.Endpoint, target string) {
 	a.log.Info("tunnel ready", args...)
 }
 
+// requestedNameFor is the name of the tunnel with a relay tunnel ID.
+func (a *Agent) requestedNameFor(tunnelID string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.names[a.targets[tunnelID]]
+}
+
 func (a *Agent) requestedName(i int) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()

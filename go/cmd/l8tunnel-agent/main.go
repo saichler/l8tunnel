@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +14,7 @@ import (
 	"github.com/saichler/l8tunnel/go/tunnel/admin"
 	"github.com/saichler/l8tunnel/go/tunnel/agent"
 	"github.com/saichler/l8tunnel/go/tunnel/config"
+	"github.com/saichler/l8tunnel/go/tunnel/inspect"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -60,6 +62,16 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	var inspectLn net.Listener
+	if file.Inspect != "" {
+		if err := inspect.CheckListenAddr(file.Inspect, file.InspectPublic); err != nil {
+			return err
+		}
+		if inspectLn, err = net.Listen("tcp", file.Inspect); err != nil {
+			return fmt.Errorf("inspect: %w", err)
+		}
+		cfg.Recorder = inspect.NewRecorder(0)
+	}
 	a, err := agent.New(cfg)
 	if err != nil {
 		return err
@@ -67,6 +79,10 @@ func run(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if inspectLn != nil {
+		go admin.Serve(ctx, inspectLn, cfg.Recorder.Handler(a.DialTarget, !file.InspectPublic), logger)
+		logger.Info("request inspector", "url", "http://"+inspectLn.Addr().String())
+	}
 	if file.StatusSocket != "" {
 		ln, err := admin.ListenUnix(file.StatusSocket)
 		if err != nil {

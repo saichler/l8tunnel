@@ -13,6 +13,7 @@ token: ${L8TUNNEL_TOKEN}
 # Serves "l8tunnel-agent status" (connection state, tunnels, traffic).
 status_socket: /run/l8tunnel-agent/status.sock
 
+# inspect: 127.0.0.1:4040 # request inspector UI for http tunnels (local only)
 # transport: tls          # or wss: WebSocket over TLS, for networks that only allow HTTP(S)
 # proxy: http://proxy.corp:3128   # default: HTTPS_PROXY / NO_PROXY; "none" disables
 # log: {format: text, level: info}

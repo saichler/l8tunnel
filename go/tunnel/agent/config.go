@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/saichler/l8tunnel/go/tunnel/auth"
+	"github.com/saichler/l8tunnel/go/tunnel/inspect"
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 	"github.com/saichler/l8tunnel/go/tunnel/transport"
 	"github.com/saichler/l8tunnel/go/types/l8tunnel"
@@ -113,6 +114,9 @@ type Config struct {
 	// Proxy is an http:// proxy URL, transport.ProxyNone, or empty to use
 	// HTTPS_PROXY / NO_PROXY from the environment.
 	Proxy string
+	// Recorder, when set, parses HTTP tunnels' traffic and records it for
+	// the request inspector; nil keeps a plain byte pipe.
+	Recorder *inspect.Recorder
 	// ReconnectMin and ReconnectMax bound the reconnect backoff; zero
 	// means DefaultReconnectMin / DefaultReconnectMax.
 	ReconnectMin time.Duration

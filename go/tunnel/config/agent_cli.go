@@ -25,6 +25,7 @@ global flags:
   --status-socket p   serve "l8tunnel-agent status" on this Unix socket
   --transport t       tls (default) or wss (WebSocket, for HTTP-only networks)
   --proxy url         http://proxy:port, "none", or default HTTPS_PROXY/NO_PROXY
+  --inspect addr      request inspector UI for http tunnels, e.g. 127.0.0.1:4040
   --log-format f      text (default) or json
   --log-level l       debug, info (default), warn or error
 
@@ -66,6 +67,7 @@ func ParseAgentArgs(args []string, stderr io.Writer) (*AgentFile, error) {
 	global.StringVar(&f.StatusSocket, "status-socket", "", "")
 	global.StringVar(&f.Transport, "transport", "", "")
 	global.StringVar(&f.Proxy, "proxy", "", "")
+	global.StringVar(&f.Inspect, "inspect", "", "")
 	global.StringVar(&f.Log.Format, "log-format", "", "")
 	global.StringVar(&f.Log.Level, "log-level", "", "")
 	if err := global.Parse(args); err != nil {

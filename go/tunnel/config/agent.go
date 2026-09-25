@@ -35,9 +35,14 @@ type AgentFile struct {
 	Transport string `yaml:"transport"`
 	// Proxy is an http:// proxy URL, "none", or empty for HTTPS_PROXY /
 	// NO_PROXY from the environment.
-	Proxy   string       `yaml:"proxy"`
-	Log     LogFile      `yaml:"log"`
-	Tunnels []TunnelFile `yaml:"tunnels"`
+	Proxy string `yaml:"proxy"`
+	// Inspect serves the request inspector UI on this address, e.g.
+	// 127.0.0.1:4040; empty disables it.
+	Inspect string `yaml:"inspect"`
+	// InspectPublic allows a non-loopback inspect address.
+	InspectPublic bool         `yaml:"inspect_public"`
+	Log           LogFile      `yaml:"log"`
+	Tunnels       []TunnelFile `yaml:"tunnels"`
 }
 
 // TunnelFile is one tunnel in AgentFile.

@@ -209,7 +209,7 @@ rate_limits: {connections_per_second: 20, connections_burst: 100, auth_failures_
 | O-1 | Structured logs (`log: {format: text\|json, level: debug\|info\|warn\|error}`, agent flags `--log-format`/`--log-level`): agent sessions, tunnel registrations, auth failures, and one line per public connection with client address, tunnel, duration and bytes. |
 | O-2 | Prometheus metrics on `metrics.listen` (plain HTTP, text format, no client library): build info, connected agents, agent sessions total, per-agent heartbeat RTT (reported by the agent in each Ping), tunnels by type, parked names, per-tunnel active/total connections and bytes in/out, auth failures, and connections rejected by reason (rate_limit, ip_denied, no_route). |
 | O-3 | Optional HTTP access log (`access_log: true`, relay-wide rather than per tunnel): host, method, path, protocol, status, bytes, duration, client, user agent and the relay's error reason, one line per request. |
-| O-4 | Optional (v1.1): request inspection/replay for HTTP tunnels, like ngrok's inspector, exposed on the agent's local UI. |
+| O-4 | Request inspector on the agent (v1.1 Q5): `inspect: 127.0.0.1:4040` (or `--inspect`) makes the agent parse its http tunnels' HTTP/1.1 traffic, record the last 200 requests (headers and the first 64 KiB of each body; bodies stream through whole; keep-alive, 1xx and upgrades handled), and serve a local web UI with live updates and replay to the local target. Loopback-only unless `inspect_public`; the API refuses non-loopback Host headers (DNS rebinding) and replays without the `X-L8tunnel-Inspector` header (cross-site requests); truncated bodies and upgrades can't be replayed. Off by default. |
 
 ## 8. Non-functional requirements
 

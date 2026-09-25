@@ -141,6 +141,13 @@ For `oidc`, configure the provider on the relay (`oidc.providers` in
 `server.yaml`) and register `https://auth.<base-domain>/callback` as its
 redirect URI. The service receives the signed-in email in `X-L8tunnel-User`.
 
+## Request inspector
+
+`l8tunnel-agent --inspect 127.0.0.1:4040 http 3000` records the requests
+reaching your HTTP tunnels. Open http://127.0.0.1:4040 to browse them
+(headers, bodies up to 64 KiB, live updates) and replay any of them against
+your local service. It binds loopback only unless `inspect_public: true`.
+
 ## Restricted networks
 
 If only HTTP(S) through a proxy is allowed out, run the agent with

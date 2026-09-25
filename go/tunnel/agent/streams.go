@@ -40,11 +40,55 @@ func (a *Agent) serveStream(ctx context.Context, stream *transport.Stream) {
 	}
 	stats.active.Add(1)
 	stats.total.Add(1)
+	defer stats.active.Add(-1)
+	if a.cfg.Recorder != nil && t.Type == l8tunnel.TunnelType_TUNNEL_TYPE_HTTP {
+		name := a.requestedNameFor(open.GetTunnelId())
+		a.cfg.Recorder.ServeStream(name, stream, &countedConn{Conn: conn, stats: stats})
+		return
+	}
 	res := pipe.Join(stream, conn)
-	stats.active.Add(-1)
 	stats.bytesIn.Add(res.AtoB)
 	stats.bytesOut.Add(res.BtoA)
 	log.Debug("stream closed", "target", t.targetString(), "bytes_in", res.AtoB, "bytes_out", res.BtoA, "error", res.Err)
+}
+
+// countedConn counts bytes to and from a target on the inspected path.
+type countedConn struct {
+	pipe.Conn
+	stats *tunnelStats
+}
+
+func (c *countedConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	c.stats.bytesOut.Add(int64(n))
+	return n, err
+}
+
+func (c *countedConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	c.stats.bytesIn.Add(int64(n))
+	return n, err
+}
+
+// DialTarget connects to the local target of a tunnel by name, for the
+// inspector's replays.
+func (a *Agent) DialTarget(name string) (net.Conn, error) {
+	a.mu.Lock()
+	var t *TunnelConfig
+	for i := range a.cfg.Tunnels {
+		if a.names[i] == name {
+			t = &a.cfg.Tunnels[i]
+		}
+	}
+	a.mu.Unlock()
+	if t == nil {
+		return nil, fmt.Errorf("no tunnel named %q", name)
+	}
+	conn, err := dialTarget(context.Background(), *t)
+	if err != nil {
+		return nil, err
+	}
+	return conn.(net.Conn), nil
 }
 
 // dialTarget connects to a tunnel's local target, over TLS when the

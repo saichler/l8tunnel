@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>l8tunnel inspector</title>
+<style>
+:root { --bg: #f6f7f9; --panel: #fff; --text: #1f2328; --muted: #656d76; --line: #d0d7de; --sel: #ddf4ff; --ok: #1a7f37; --warn: #9a6700; --err: #cf222e; --code: #f0f2f5; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0d1117; --panel: #161b22; --text: #e6edf3; --muted: #8b949e; --line: #30363d; --sel: #1f3a5c; --ok: #3fb950; --warn: #d29922; --err: #f85149; --code: #0d1117; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+header { display: flex; align-items: center; gap: 1rem; padding: .6rem 1rem; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { font-size: 1rem; margin: 0; }
+header .live { color: var(--muted); font-size: .85rem; }
+main { display: grid; grid-template-columns: minmax(280px, 42%) 1fr; height: calc(100vh - 45px); }
+@media (max-width: 760px) { main { grid-template-columns: 1fr; height: auto; } #detail { border-left: 0; border-top: 1px solid var(--line); } }
+#list { overflow: auto; border-right: 1px solid var(--line); }
+table { width: 100%; border-collapse: collapse; }
+td { padding: .35rem .6rem; border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 1px; }
+tr { cursor: pointer; }
+tr:hover, tr.sel { background: var(--sel); }
+td.m { width: 4.5rem; font-weight: 600; }
+td.s { width: 3.5rem; text-align: right; }
+td.d { width: 5rem; text-align: right; color: var(--muted); }
+.s2 { color: var(--ok); } .s3 { color: var(--muted); } .s4 { color: var(--warn); } .s5, .serr { color: var(--err); }
+#detail { overflow: auto; padding: 1rem; background: var(--panel); }
+#detail h2 { font-size: 1rem; margin: 0 0 .5rem; word-break: break-all; }
+#detail h3 { font-size: .85rem; text-transform: uppercase; color: var(--muted); margin: 1.2rem 0 .4rem; }
+pre { background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: .6rem; overflow: auto; max-height: 40vh; margin: 0; white-space: pre-wrap; word-break: break-all; }
+button { font: inherit; padding: .3rem .8rem; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+.meta { color: var(--muted); font-size: .85rem; }
+.empty { color: var(--muted); padding: 2rem 1rem; text-align: center; }
+</style>
+</head>
+<body>
+<header><h1>l8tunnel inspector</h1><span class="live" id="live">connecting…</span></header>
+<main>
+  <section id="list"><table><tbody id="rows"></tbody></table><div class="empty" id="empty">No requests yet. Requests to your HTTP tunnels show up here.</div></section>
+  <section id="detail"><div class="empty">Select a request.</div></section>
+</main>
+<script>
+"use strict";
+// Everything shown comes from the internet: build DOM nodes and set
+// textContent, never innerHTML.
+const rows = document.getElementById("rows"), detail = document.getElementById("detail");
+let selected = null;
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+function statusClass(s) { return s ? "s" + String(s)[0] : "serr"; }
+
+function addRow(s, atTop) {
+  document.getElementById("empty").style.display = "none";
+  const tr = el("tr");
+  tr.dataset.id = s.id;
+  tr.append(el("td", "m", s.method), el("td", "", (s.replay_of ? "↻ " : "") + s.uri),
+            el("td", "s " + statusClass(s.status), s.status || "ERR"), el("td", "d", s.duration_ms.toFixed(1) + " ms"));
+  tr.onclick = () => show(s.id);
+  atTop ? rows.prepend(tr) : rows.append(tr);
+}
+
+function body(bytesB64, size, headers) {
+  if (!size) return el("div", "meta", "(empty)");
+  const raw = atob(bytesB64 || "");
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(raw, c => c.charCodeAt(0))); }
+  catch (e) { return el("div", "meta", "binary body, " + size + " bytes"); }
+  const ct = (headers && headers["Content-Type"] || [""])[0];
+  if (ct.includes("json")) { try { text = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {} }
+  const box = el("div");
+  box.append(el("pre", "", text));
+  if (size > raw.length) box.append(el("div", "meta", "showing the first " + raw.length + " of " + size + " bytes"));
+  return box;
+}
+
+function headerBlock(h) {
+  const lines = Object.keys(h || {}).sort().flatMap(k => h[k].map(v => k + ": " + v));
+  return el("pre", "", lines.join("\n") || "(none)");
+}
+
+async function show(id) {
+  selected = id;
+  for (const r of rows.children) r.classList.toggle("sel", r.dataset.id == id);
+  const resp = await fetch("/api/requests/" + id);
+  if (!resp.ok) return;
+  const e = await resp.json();
+  detail.replaceChildren();
+  detail.append(el("h2", "", e.method + " " + e.uri));
+  detail.append(el("div", "meta", e.tunnel + " · " + e.host + " · " + new Date(e.time).toLocaleString() + " · " +
+    (e.status || "no response") + " · " + e.duration_ms.toFixed(1) + " ms" + (e.replay_of ? " · replay of #" + e.replay_of : "")));
+  if (e.error) detail.append(el("div", "s5", e.error));
+  const replay = el("button", "", "Replay");
+  replay.style.marginTop = ".8rem";
+  replay.onclick = async () => {
+    replay.disabled = true;
+    const r = await fetch("/api/requests/" + id + "/replay", { method: "POST", headers: { "X-L8tunnel-Inspector": "1" } });
+    const out = await r.json();
+    replay.disabled = false;
+    if (!r.ok) { alert(out.error); return; }
+    show(out.id);
+  };
+  detail.append(replay);
+  detail.append(el("h3", "", "Request headers"), headerBlock(e.request_headers));
+  detail.append(el("h3", "", "Request body"), body(e.request_body, e.request_size, e.request_headers));
+  detail.append(el("h3", "", "Response headers"), headerBlock(e.response_headers));
+  detail.append(el("h3", "", "Response body"), body(e.response_body, e.response_size, e.response_headers));
+}
+
+(async () => {
+  const list = await (await fetch("/api/requests")).json();
+  list.forEach(s => addRow(s, false));
+  const live = document.getElementById("live");
+  const events = new EventSource("/api/events");
+  events.onopen = () => live.textContent = "live";
+  events.onerror = () => live.textContent = "reconnecting…";
+  events.onmessage = m => addRow(JSON.parse(m.data), true);
+})();
+</script>
+</body>
+</html>
