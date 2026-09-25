@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/httpproxy"
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 	"github.com/saichler/l8tunnel/go/tunnel/transport"
@@ -136,6 +137,13 @@ func (s *Server) serveConn(raw *net.TCPConn) {
 		return
 	}
 
+	if s.cfg.Login != nil && sni == s.cfg.Login.AuthHost() {
+		if tconn := s.terminate(conn, s.routes.http, log); tconn != nil {
+			s.http.ServeConn(tconn)
+			handedOff = true
+		}
+		return
+	}
 	t, typ, name := s.resolveHost(sni)
 	switch {
 	case t != nil && !t.access.AllowsIP(remoteIP(raw.RemoteAddr())) && typ != l8tunnel.TunnelType_TUNNEL_TYPE_HTTP:
@@ -217,6 +225,9 @@ func (s *Server) lookupHTTP(host string) (httpproxy.Tunnel, httpproxy.State, str
 // name, or a reserved custom domain. It is the policy for on-demand ACME
 // certificates.
 func (s *Server) IsTunnelHost(host string) bool {
+	if s.cfg.Login != nil && strings.ToLower(host) == s.cfg.Login.AuthHost() {
+		return true
+	}
 	_, _, name := s.resolveHost(host)
 	_, _, found := s.registry.lookup(name)
 	return found
@@ -265,4 +276,14 @@ func (s *Server) serveTokenTunnel(t *tunnel, hello *tls.ClientHelloInfo, conn *p
 	}
 	tconn.SetReadDeadline(time.Time{})
 	t.forward(tconn, conn.RemoteAddr().String())
+}
+
+// OIDCRuleFor returns the OIDC rule of the active HTTP tunnel serving
+// host, or nil (oidc.Binding.RuleFor).
+func (s *Server) OIDCRuleFor(host string) *auth.OIDCRule {
+	t, typ, _ := s.resolveHost(host)
+	if t == nil || typ != l8tunnel.TunnelType_TUNNEL_TYPE_HTTP {
+		return nil
+	}
+	return t.access.OIDC()
 }

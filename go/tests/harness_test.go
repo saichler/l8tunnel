@@ -14,6 +14,7 @@ import (
 
 	"github.com/saichler/l8tunnel/go/tunnel/agent"
 	"github.com/saichler/l8tunnel/go/tunnel/auth"
+	"github.com/saichler/l8tunnel/go/tunnel/oidc"
 	"github.com/saichler/l8tunnel/go/tunnel/relay"
 	"github.com/saichler/l8tunnel/go/tunnel/store"
 	"github.com/saichler/l8tunnel/go/tunnel/transport"
@@ -50,8 +51,9 @@ type relayOpts struct {
 	testPolicy       auth.Policy       // policy of the "test" token
 	rateLimits       *relay.RateLimits // nil: limits high enough not to matter
 	accessLog        bool
-	logger           *slog.Logger // nil: testLogger()
-	store            *store.Store // reused across restarts
+	logger           *slog.Logger  // nil: testLogger()
+	login            *oidc.Service // OIDC login service, bound after start
+	store            *store.Store  // reused across restarts
 }
 
 // relayEnv is a running relay on 127.0.0.1.
@@ -124,6 +126,7 @@ func startRelayWith(t testing.TB, opts relayOpts) *relayEnv {
 		Reservations:            reservations,
 		RateLimits:              limits,
 		AccessLog:               opts.accessLog,
+		Login:                   loginService(opts.login),
 		BindHost:                "127.0.0.1",
 		TCPPortMin:              opts.portMin,
 		TCPPortMax:              opts.portMax,
@@ -138,8 +141,19 @@ func startRelayWith(t testing.TB, opts relayOpts) *relayEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { srv.Close() })
+	if opts.login != nil {
+		opts.login.Bind(oidc.Binding{RuleFor: srv.OIDCRuleFor, HTTPSPort: srv.PublicHTTPSPort})
+	}
 	return &relayEnv{srv: srv, opts: opts, pki: opts.pki, store: opts.store, addr: srv.Addr().String(),
 		portMin: opts.portMin, portMax: opts.portMax}
+}
+
+// loginService keeps a nil *oidc.Service a nil interface.
+func loginService(s *oidc.Service) relay.LoginService {
+	if s == nil {
+		return nil
+	}
+	return s
 }
 
 // newTestStore opens a store holding the "test" and "other" tokens,

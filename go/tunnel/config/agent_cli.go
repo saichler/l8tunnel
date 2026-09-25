@@ -38,6 +38,9 @@ tunnel flags:
                            "l8tunnel hash-password")
   --access-token T         mode B clients must present T (tcp/ssh only; no mode A port)
   --domain D               also serve custom domain D, CNAME'd to the relay (http/tls; repeatable)
+  --oidc P                 require a login at the relay's OIDC provider P (http), with
+  --allow-email E          ...these emails (repeatable) and/or
+  --allow-domain D         ...everyone at these email domains (repeatable)
 
 A bare port as the target means 127.0.0.1:<port>. ssh defaults to 127.0.0.1:22.
 http tunnels are served at https://<name>.<base-domain>; an https:// target makes
@@ -118,9 +121,17 @@ func parseTunnelArgs(typ string, args []string, stderr io.Writer) (TunnelFile, e
 	fs.Var(&basic, "basic-auth", "")
 	fs.StringVar(&t.AccessToken, "access-token", "", "")
 	fs.Var((*stringList)(&t.Domains), "domain", "")
+	var oidcProvider string
+	var allowEmails, allowDomains stringList
+	fs.StringVar(&oidcProvider, "oidc", "", "")
+	fs.Var(&allowEmails, "allow-email", "")
+	fs.Var(&allowDomains, "allow-domain", "")
 	port := fs.Uint("port", 0, "")
 	if err := fs.Parse(args); err != nil {
 		return t, err
+	}
+	if oidcProvider != "" || len(allowEmails) > 0 || len(allowDomains) > 0 {
+		t.OIDC = &OIDCTunnel{Provider: oidcProvider, AllowEmails: allowEmails, AllowDomains: allowDomains}
 	}
 	for _, b := range basic {
 		user, hash, ok := strings.Cut(b, ":")

@@ -123,7 +123,15 @@ tunnels:
   - name: backup
     type: ssh
     access_token: ${BACKUP_TOKEN}   # clients: l8tunnel connect --access-token ...
+  - name: wiki
+    type: http
+    target: 8080
+    oidc: {provider: google, allow_domains: [example.com]}   # sign in with Google
 ```
+
+For `oidc`, configure the provider on the relay (`oidc.providers` in
+`server.yaml`) and register `https://auth.<base-domain>/callback` as its
+redirect URI. The service receives the signed-in email in `X-L8tunnel-User`.
 
 ## Restricted networks
 

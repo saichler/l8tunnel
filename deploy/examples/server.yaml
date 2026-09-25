@@ -52,6 +52,16 @@ tls:
 # metrics:
 #   listen: 127.0.0.1:9100           # Prometheus metrics; empty disables
 
+# oidc:                              # "sign in with ..." for http tunnels
+#   # auth_host: auth.tunnel.example.com   # default auth.<base_domain>; register
+#   #                                      # https://<auth_host>/callback at the provider
+#   # session_ttl: 12h
+#   providers:
+#     google:
+#       issuer: https://accounts.google.com
+#       client_id: 1234.apps.googleusercontent.com
+#       client_secret: ${GOOGLE_CLIENT_SECRET}
+
 # rate_limits:                       # per client IP
 #   connections_per_second: 20
 #   connections_burst: 100

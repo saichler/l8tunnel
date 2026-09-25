@@ -3,6 +3,7 @@
 package store
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -282,4 +283,26 @@ func (s *Store) IssueCert(tokenName string, days int) (*auth.IssuedCert, *auth.T
 		return put(b, rec.ID, rec)
 	})
 	return issued, rec, err
+}
+
+// SessionKey returns the relay's key for signing login states and session
+// cookies, creating it on first use.
+func (s *Store) SessionKey() ([]byte, error) {
+	var key []byte
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists(bucketCA)
+		if err != nil {
+			return err
+		}
+		if k := b.Get([]byte("session-key")); len(k) == 32 {
+			key = append([]byte(nil), k...)
+			return nil
+		}
+		key = make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			return err
+		}
+		return b.Put([]byte("session-key"), key)
+	})
+	return key, err
 }

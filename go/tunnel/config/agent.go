@@ -57,6 +57,15 @@ type TunnelFile struct {
 	AccessToken string `yaml:"access_token"`
 	// Domains are custom domains (http/tls) pointed at the relay by CNAME.
 	Domains []string `yaml:"domains"`
+	// OIDC requires a login at one of the relay's providers (http).
+	OIDC *OIDCTunnel `yaml:"oidc"`
+}
+
+// OIDCTunnel is a tunnel's oidc block.
+type OIDCTunnel struct {
+	Provider     string   `yaml:"provider"`
+	AllowEmails  []string `yaml:"allow_emails"`
+	AllowDomains []string `yaml:"allow_domains"`
 }
 
 // BasicAuthUser is one basic_auth entry.
@@ -132,6 +141,7 @@ func (f *AgentFile) AgentConfig(logger *slog.Logger, version string) (agent.Conf
 			BasicUsers:         users,
 			AccessToken:        accessToken,
 			Domains:            t.Domains,
+			OIDC:               oidcConfig(t.OIDC),
 		})
 	}
 	return agent.Config{
@@ -144,4 +154,11 @@ func (f *AgentFile) AgentConfig(logger *slog.Logger, version string) (agent.Conf
 		Tunnels:   tunnels,
 		Logger:    logger,
 	}, nil
+}
+
+func oidcConfig(o *OIDCTunnel) *agent.OIDCConfig {
+	if o == nil {
+		return nil
+	}
+	return &agent.OIDCConfig{Provider: o.Provider, AllowEmails: o.AllowEmails, AllowDomains: o.AllowDomains}
 }

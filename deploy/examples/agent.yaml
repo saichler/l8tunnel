@@ -33,6 +33,7 @@ tunnels:
     type: http                # https://grafana.tunnel.example.com, TLS terminated at the relay
     target: 3000              # a bare port means 127.0.0.1:3000
     # domains: [grafana.example.com]   # CNAME'd to the relay; token needs --domains
+    # oidc: {provider: google, allow_domains: [example.com]}   # instead of basic_auth
     basic_auth:               # hashes from: l8tunnel hash-password
       - user: admin
         password_hash: "$2a$10$7EqJtq98hPqEX7fNZaFWoOhi5BWX4Z3Z6KqQo5nsgvs1R3.x2T6Ku"  # placeholder: use your own

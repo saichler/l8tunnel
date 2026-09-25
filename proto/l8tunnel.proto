@@ -67,6 +67,15 @@ message AccessPolicy {
   repeated BasicUser basic_users = 3;  // HTTP tunnels only
   bytes access_token_sha256 = 4;       // TCP/SSH only: mode B clients must
                                        // present the token (no mode A port)
+  OIDCPolicy oidc = 5;                 // HTTP only: sign in through a provider
+}
+
+// OIDCPolicy requires an OIDC login (with a provider configured on the
+// relay) and restricts who may pass; at least one allow entry is required.
+message OIDCPolicy {
+  string provider = 1;
+  repeated string allow_emails = 2;
+  repeated string allow_domains = 3;
 }
 
 message BasicUser {

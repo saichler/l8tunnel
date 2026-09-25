@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/saichler/l8tunnel/go/tunnel/auth"
+	"github.com/saichler/l8tunnel/go/tunnel/httpproxy"
 )
 
 const (
@@ -29,6 +30,12 @@ const (
 	DefaultConnectionsBurst      = 100
 	DefaultAuthFailuresPerMinute = 5
 )
+
+// LoginService is the OIDC login service (oidc.Service).
+type LoginService interface {
+	httpproxy.Login
+	HasProvider(name string) bool
+}
 
 // TokenStore looks up agent tokens by ID; it returns nil (and no error)
 // for an unknown ID. store.Store implements it.
@@ -76,6 +83,9 @@ type Config struct {
 	DisableForwardedHeaders bool
 	// AccessLog logs every HTTP tunnel request.
 	AccessLog bool
+	// Login is the OIDC login service; nil when none is configured. Its
+	// auth host's label can't be used as a tunnel name.
+	Login LoginService
 	// Version is reported in logs and metrics.
 	Version string
 	// TLS is the relay's server TLS config (see transport.ServerTLSConfig).

@@ -72,7 +72,7 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 			"token %q may not use the tunnel name %q", sess.token.Name, name)
 	}
 	hostname := name + "." + s.cfg.BaseDomain
-	if hostname == s.cfg.ControlSNI {
+	if hostname == s.cfg.ControlSNI || (s.cfg.Login != nil && hostname == s.cfg.Login.AuthHost()) {
 		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST,
 			"tunnel name %q is reserved for the relay", name)
 	}
@@ -171,6 +171,10 @@ func (s *Server) checkAccess(typ l8tunnel.TunnelType, spec *l8tunnel.TunnelSpec)
 	access, err := auth.ValidateSpecAccess(typ, spec.GetPublicPort(), spec.GetAccess())
 	if err != nil {
 		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST, "tunnel %q: %v", spec.GetName(), err)
+	}
+	if rule := access.OIDC(); rule != nil && (s.cfg.Login == nil || !s.cfg.Login.HasProvider(rule.Provider)) {
+		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST,
+			"tunnel %q: the relay has no OIDC provider %q", spec.GetName(), rule.Provider)
 	}
 	return access, nil
 }

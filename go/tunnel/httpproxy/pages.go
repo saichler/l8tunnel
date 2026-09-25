@@ -25,6 +25,7 @@ var (
 	errMisdirected   = pageError{"misdirected", "Misdirected request", "The Host header doesn't match the TLS server name of this connection."}
 	errIPDenied      = pageError{"ip-denied", "Forbidden", "This tunnel doesn't accept connections from your address."}
 	errUnauthorized  = pageError{"unauthorized", "Authentication required", "This tunnel requires a username and password."}
+	errNoLogin       = pageError{"login-unavailable", "Login unavailable", "This tunnel requires a login, but the relay has no login provider configured."}
 )
 
 var pageTemplate = template.Must(template.New("page").Parse(`<!DOCTYPE html>
@@ -68,6 +69,11 @@ func writeError(w http.ResponseWriter, status int, e pageError, host string) {
 		Status               int
 		Title, Message, Host string
 	}{status, e.title, e.message, host})
+}
+
+// WriteErrorPage writes the relay's HTML error page (used by oidc).
+func WriteErrorPage(w http.ResponseWriter, status int, code, title, message, host string) {
+	writeError(w, status, pageError{code, title, message}, host)
 }
 
 // RedirectHandler redirects plain HTTP requests to HTTPS on the same host.

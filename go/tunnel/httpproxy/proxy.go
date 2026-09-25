@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/saichler/l8tunnel/go/tunnel/auth"
+	"github.com/saichler/l8tunnel/go/tunnel/oidc"
 	"github.com/saichler/l8tunnel/go/tunnel/transport"
 )
 
@@ -41,6 +42,13 @@ type Tunnel interface {
 	Access() *auth.Access
 }
 
+// Login is the OIDC login service (oidc.Service).
+type Login interface {
+	AuthHost() string
+	AuthHandler() http.Handler
+	Authorize(w http.ResponseWriter, r *http.Request, rule *auth.OIDCRule) (user string, proceed bool)
+}
+
 // LookupFunc resolves a host name (lowercase, no port). The Tunnel is nil
 // unless the state is StateActive. name identifies the tunnel the host
 // belongs to ("" for a host the relay doesn't serve); two hosts of the
@@ -54,8 +62,11 @@ type Config struct {
 	ForwardedHeaders bool
 	// AccessLog logs one line per request.
 	AccessLog bool
-	Lookup    LookupFunc
-	Logger    *slog.Logger
+	// Login serves the auth host and OIDC-protected tunnels; nil when no
+	// OIDC provider is configured.
+	Login  Login
+	Lookup LookupFunc
+	Logger *slog.Logger
 }
 
 // Proxy is an HTTP/1.1 and HTTP/2 server for terminated tunnel traffic.
@@ -128,6 +139,14 @@ func (p *Proxy) Close() error {
 
 // ServeHTTP routes a request by its Host header.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if p.cfg.Login != nil && normalizeHost(r.Host) == p.cfg.Login.AuthHost() {
+		if r.TLS != nil && normalizeHost(r.TLS.ServerName) != p.cfg.Login.AuthHost() {
+			writeError(w, http.StatusMisdirectedRequest, errMisdirected, r.Host)
+			return
+		}
+		p.cfg.Login.AuthHandler().ServeHTTP(w, r)
+		return
+	}
 	tun, state, name := p.cfg.Lookup(normalizeHost(r.Host))
 	if name == "" {
 		writeError(w, http.StatusNotFound, errUnknownHost, r.Host)
@@ -143,7 +162,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch state {
 	case StateActive:
-		if !authorize(w, r, tun.Access()) {
+		if !p.authorize(w, r, tun.Access()) {
 			return
 		}
 		p.proxyFor(tun).proxy.ServeHTTP(w, r)
@@ -157,7 +176,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // authorize applies a tunnel's access policy, writing the 403/401 page
 // when the request isn't allowed. Credentials the relay checked are
 // removed so they don't reach (or confuse) the service.
-func authorize(w http.ResponseWriter, r *http.Request, access *auth.Access) bool {
+func (p *Proxy) authorize(w http.ResponseWriter, r *http.Request, access *auth.Access) bool {
+	// Only the relay sets the user header.
+	r.Header.Del(oidc.UserHeader)
 	ap, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil || !access.AllowsIP(ap.Addr()) {
 		writeError(w, http.StatusForbidden, errIPDenied, r.Host)
@@ -171,6 +192,17 @@ func authorize(w http.ResponseWriter, r *http.Request, access *auth.Access) bool
 			return false
 		}
 		r.Header.Del("Authorization")
+	}
+	if rule := access.OIDC(); rule != nil {
+		if p.cfg.Login == nil {
+			writeError(w, http.StatusServiceUnavailable, errNoLogin, r.Host)
+			return false
+		}
+		user, ok := p.cfg.Login.Authorize(w, r, rule)
+		if !ok {
+			return false
+		}
+		r.Header.Set(oidc.UserHeader, user)
 	}
 	return true
 }

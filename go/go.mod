@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/caddyserver/certmagic v0.25.4
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/hashicorp/yamux v0.1.2
 	github.com/libdns/cloudflare v0.2.2
@@ -11,11 +12,13 @@ require (
 	go.uber.org/zap v1.28.0
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/crypto v0.57.0
+	golang.org/x/oauth2 v0.37.0
 	google.golang.org/protobuf v1.36.12
 )
 
 require (
 	github.com/caddyserver/zerossl v0.1.5 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/libdns/libdns v1.1.1 // indirect
 	github.com/mholt/acmez/v3 v3.1.6 // indirect

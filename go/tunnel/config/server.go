@@ -10,6 +10,8 @@ import (
 
 	"github.com/saichler/l8tunnel/go/tunnel/admin"
 	"github.com/saichler/l8tunnel/go/tunnel/certs"
+	"github.com/saichler/l8tunnel/go/tunnel/httpproxy"
+	"github.com/saichler/l8tunnel/go/tunnel/oidc"
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 	"github.com/saichler/l8tunnel/go/tunnel/relay"
 	"github.com/saichler/l8tunnel/go/tunnel/store"
@@ -73,6 +75,8 @@ type ServerFile struct {
 		// Listen is an address such as 127.0.0.1:9100; empty disables it.
 		Listen string `yaml:"listen"`
 	} `yaml:"metrics"`
+	// OIDC enables "sign in with ..." for http tunnels.
+	OIDC *OIDCFile `yaml:"oidc"`
 	// RateLimits are per client IP; zero values mean the relay defaults.
 	RateLimits struct {
 		ConnectionsPerSecond  float64 `yaml:"connections_per_second"`
@@ -83,6 +87,21 @@ type ServerFile struct {
 	// empty means the relay defaults (15s and 5m).
 	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
 	NameGracePeriod   time.Duration `yaml:"name_grace_period"`
+}
+
+// OIDCFile is the oidc block of server.yaml.
+type OIDCFile struct {
+	// AuthHost is the login host; empty means auth.<base_domain>.
+	AuthHost string `yaml:"auth_host"`
+	// SessionTTL is how long a login lasts; empty means 12h.
+	SessionTTL time.Duration `yaml:"session_ttl"`
+	// Providers by name; tunnels pick one with oidc.provider.
+	Providers map[string]struct {
+		Issuer       string   `yaml:"issuer"`
+		ClientID     string   `yaml:"client_id"`
+		ClientSecret string   `yaml:"client_secret"` // may be ${ENV_VAR}
+		Scopes       []string `yaml:"scopes"`
+	} `yaml:"providers"`
 }
 
 // ACMEFile is the acme block of server.yaml.
@@ -166,12 +185,50 @@ func (f *ServerFile) NewRelay(ctx context.Context, logger *slog.Logger, st *stor
 	if len(tokens) == 0 {
 		logger.Warn("no agent tokens yet; create one with: l8tunnel-server token create --name <name>")
 	}
+	var login *oidc.Service
+	if f.OIDC != nil {
+		if login, err = f.oidcService(st, logger); err != nil {
+			return nil, err
+		}
+		cfg.Login = login
+	}
 	srv, err := relay.New(cfg)
 	if err != nil {
 		return nil, err
 	}
 	mgr.AllowHosts(srv.IsTunnelHost)
+	if login != nil {
+		login.Bind(oidc.Binding{RuleFor: srv.OIDCRuleFor, HTTPSPort: srv.PublicHTTPSPort})
+	}
 	return srv, nil
+}
+
+// oidcService builds the OIDC login service from the oidc block.
+func (f *ServerFile) oidcService(st *store.Store, logger *slog.Logger) (*oidc.Service, error) {
+	key, err := st.SessionKey()
+	if err != nil {
+		return nil, fmt.Errorf("oidc: session key: %w", err)
+	}
+	authHost := strings.ToLower(f.OIDC.AuthHost)
+	if authHost == "" {
+		authHost = "auth." + strings.ToLower(strings.TrimSuffix(f.BaseDomain, "."))
+	}
+	providers := map[string]oidc.ProviderConfig{}
+	for name, p := range f.OIDC.Providers {
+		secret, err := expandEnv("oidc.providers."+name+".client_secret", p.ClientSecret)
+		if err != nil {
+			return nil, err
+		}
+		providers[name] = oidc.ProviderConfig{Issuer: p.Issuer, ClientID: p.ClientID, ClientSecret: secret, Scopes: p.Scopes}
+	}
+	return oidc.New(oidc.Config{
+		AuthHost:   authHost,
+		Providers:  providers,
+		SessionTTL: f.OIDC.SessionTTL,
+		Key:        key,
+		ErrorPage:  httpproxy.WriteErrorPage,
+		Logger:     logger,
+	})
 }
 
 // RelayConfig builds the relay configuration (without its token store)

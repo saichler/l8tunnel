@@ -45,6 +45,9 @@ type TunnelConfig struct {
 	AllowIPs, DenyIPs []string
 	// BasicUsers require HTTP basic auth at the relay (HTTP tunnels only).
 	BasicUsers []BasicUser
+	// OIDC requires a login at one of the relay's OIDC providers (HTTP
+	// tunnels only); nil means none.
+	OIDC *OIDCConfig
 	// Domains are custom domains (CNAME to the relay) this tunnel also
 	// serves; HTTP/TLS only, and the token's policy must allow them.
 	Domains []string
@@ -52,6 +55,13 @@ type TunnelConfig struct {
 	// ("l8tunnel connect --access-token"); TCP/SSH only, and the tunnel
 	// then has no mode A port. Only its SHA-256 is sent to the relay.
 	AccessToken string
+}
+
+// OIDCConfig is a tunnel's OIDC login requirement.
+type OIDCConfig struct {
+	Provider     string
+	AllowEmails  []string
+	AllowDomains []string
 }
 
 // BasicUser is an HTTP basic-auth user with a bcrypt password hash.
@@ -68,6 +78,9 @@ func (t TunnelConfig) accessPolicy() *l8tunnel.AccessPolicy {
 	}
 	if t.AccessToken != "" {
 		p.AccessTokenSha256 = auth.HashAccessToken(t.AccessToken)
+	}
+	if t.OIDC != nil {
+		p.Oidc = &l8tunnel.OIDCPolicy{Provider: t.OIDC.Provider, AllowEmails: t.OIDC.AllowEmails, AllowDomains: t.OIDC.AllowDomains}
 	}
 	return p
 }

@@ -68,6 +68,7 @@ func New(cfg Config) (*Server, error) {
 	s.http = httpproxy.New(httpproxy.Config{
 		ForwardedHeaders: !cfg.DisableForwardedHeaders,
 		AccessLog:        cfg.AccessLog,
+		Login:            loginOrNil(cfg.Login),
 		Lookup:           s.lookupHTTP,
 		Logger:           cfg.Logger,
 	})
@@ -218,4 +219,17 @@ func (s *Server) goTracked(fn func()) {
 		defer s.wg.Done()
 		fn()
 	}()
+}
+
+// loginOrNil keeps a nil LoginService a nil interface for httpproxy.
+func loginOrNil(l LoginService) httpproxy.Login {
+	if l == nil {
+		return nil
+	}
+	return l
+}
+
+// PublicHTTPSPort is the port clients use for HTTPS.
+func (s *Server) PublicHTTPSPort() int {
+	return s.publicHTTPSPort()
 }
