@@ -27,6 +27,44 @@ func (s *Server) MetricsHandler() http.Handler {
 	})
 }
 
+// OpsHandler serves the operational endpoints on one listener:
+// /metrics (Prometheus), /healthz (the process is up) and /readyz (the
+// relay is listening and not shutting down), for Kubernetes probes and
+// monitoring.
+func (s *Server) OpsHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", s.MetricsHandler())
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		writeProbe(w, true, "ok")
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
+		ready, why := s.Ready()
+		writeProbe(w, ready, why)
+	})
+	return mux
+}
+
+// Ready reports whether the relay is serving: started and not closing.
+func (s *Server) Ready() (bool, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case s.closed:
+		return false, "shutting down"
+	case s.listener == nil:
+		return false, "not listening yet"
+	}
+	return true, "ok"
+}
+
+func writeProbe(w http.ResponseWriter, ok bool, msg string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if !ok {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	fmt.Fprintln(w, msg)
+}
+
 func (s *Server) writeMetrics(w io.Writer) {
 	st := s.Status()
 	m := &metricWriter{w: w}

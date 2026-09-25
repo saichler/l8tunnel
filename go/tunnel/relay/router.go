@@ -13,6 +13,7 @@ import (
 	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/httpproxy"
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
+	"github.com/saichler/l8tunnel/go/tunnel/sni"
 	"github.com/saichler/l8tunnel/go/tunnel/transport"
 	"github.com/saichler/l8tunnel/go/types/l8tunnel"
 )
@@ -62,16 +63,6 @@ func newRouteConfigs(base *tls.Config, agentCA *x509.Certificate) routeConfigs {
 	return routeConfigs{agent: agent, agentWS: agentWS, tunnel: tunnel, tunnelToken: tunnelToken, http: http, reject: reject}
 }
 
-// tunnelName extracts the tunnel name from <name>.<base-domain>, or
-// returns "" when sni isn't a tunnel host name.
-func (s *Server) tunnelName(sni string) string {
-	name, ok := strings.CutSuffix(sni, "."+s.cfg.BaseDomain)
-	if !ok || !namePattern.MatchString(name) {
-		return ""
-	}
-	return name
-}
-
 func offers(protos []string, want ...string) bool {
 	for _, p := range protos {
 		for _, w := range want {
@@ -95,7 +86,7 @@ func offers(protos []string, want ...string) bool {
 //     (or its error page)
 //   - anything else: the handshake fails with an alert, so l8tunnel
 //     connect gets an error instead of an empty connection
-func (s *Server) serveConn(raw *net.TCPConn) {
+func (s *Server) serveConn(raw net.Conn) {
 	handedOff := false
 	defer func() {
 		if !handedOff {
@@ -108,7 +99,7 @@ func (s *Server) serveConn(raw *net.TCPConn) {
 	}
 	raw.SetReadDeadline(time.Now().Add(handshakeTimeout))
 
-	hello, conn, err := peekClientHello(raw)
+	hello, conn, err := sni.Peek(raw)
 	if err != nil {
 		log.Debug("no TLS ClientHello", "error", err)
 		return
@@ -171,7 +162,7 @@ func (s *Server) serveConn(raw *net.TCPConn) {
 
 // terminate completes a TLS handshake with cfg and clears the read
 // deadline set for the handshake. It returns nil if the handshake fails.
-func (s *Server) terminate(conn *prefixConn, cfg *tls.Config, log *slog.Logger) *tls.Conn {
+func (s *Server) terminate(conn *sni.Conn, cfg *tls.Config, log *slog.Logger) *tls.Conn {
 	tconn := tls.Server(conn, cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
 	err := tconn.HandshakeContext(ctx)
@@ -185,7 +176,7 @@ func (s *Server) terminate(conn *prefixConn, cfg *tls.Config, log *slog.Logger) 
 }
 
 // reject fails the handshake with an alert.
-func (s *Server) reject(conn *prefixConn, log *slog.Logger, why string) {
+func (s *Server) reject(conn *sni.Conn, log *slog.Logger, why string) {
 	log.Debug("rejected TLS connection", "reason", why)
 	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
 	defer cancel()
@@ -198,7 +189,7 @@ func (s *Server) reject(conn *prefixConn, log *slog.Logger, why string) {
 // when <name> isn't reserved.
 func (s *Server) resolveHost(host string) (t *tunnel, typ l8tunnel.TunnelType, name string) {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	if name = s.tunnelName(host); name != "" {
+	if name = s.rules.TunnelName(host); name != "" {
 		t, typ, _ = s.registry.lookup(name)
 		return t, typ, name
 	}
@@ -244,7 +235,7 @@ func peerCert(cs tls.ConnectionState) *x509.Certificate {
 // serveTokenTunnel serves mode B for a tunnel that requires an access
 // token: the client must negotiate the connect-token ALPN and send a
 // ConnectAuth with the right token before any data is forwarded.
-func (s *Server) serveTokenTunnel(t *tunnel, hello *tls.ClientHelloInfo, conn *prefixConn, log *slog.Logger) {
+func (s *Server) serveTokenTunnel(t *tunnel, hello *tls.ClientHelloInfo, conn *sni.Conn, log *slog.Logger) {
 	ip := remoteIP(conn.RemoteAddr())
 	if s.authFailures.Exhausted(ip) {
 		s.reject(conn, log, "too many failed access tokens from this address")

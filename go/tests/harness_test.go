@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	mrand "math/rand"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -52,11 +53,12 @@ type relayOpts struct {
 	testPolicy       auth.Policy       // policy of the "test" token
 	rateLimits       *relay.RateLimits // nil: limits high enough not to matter
 	accessLog        bool
-	logger           *slog.Logger  // nil: testLogger()
-	login            *oidc.Service // OIDC login service, bound after start
-	gateway          ssh.Signer    // enables the SSH gateway with this host key
-	reserved         []string      // reserved tunnel names
-	store            *store.Store  // reused across restarts
+	logger           *slog.Logger   // nil: testLogger()
+	login            *oidc.Service  // OIDC login service, bound after start
+	gateway          ssh.Signer     // enables the SSH gateway with this host key
+	reserved         []string       // reserved tunnel names
+	store            *store.Store   // reused across restarts
+	trustedProxies   []netip.Prefix // PROXY protocol headers accepted from these
 }
 
 // relayEnv is a running relay on 127.0.0.1.
@@ -132,6 +134,7 @@ func startRelayWith(t testing.TB, opts relayOpts) *relayEnv {
 		Login:                   loginService(opts.login),
 		SSHGateway:              gatewayConfig(opts),
 		ReservedNames:           opts.reserved,
+		TrustedProxies:          opts.trustedProxies,
 		BindHost:                "127.0.0.1",
 		TCPPortMin:              opts.portMin,
 		TCPPortMax:              opts.portMax,

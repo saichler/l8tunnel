@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft, waiting for approval |
+| **Status** | Approved 2026-09-25; implementation in progress (K0) |
 | **Date** | 2026-09-25 |
 | **Builds on** | [PRD.md](PRD.md), [v1.1-plan.md](v1.1-plan.md), the relay and agent install packages |
 | **Rules** | `../l8book/layer-8-guide-lines.md`, `../l8book/layer-8-arch.md` |
@@ -74,15 +74,23 @@ home router forwards 80, 443 and 22000–22999 to that one machine. This plan:
 
 - Only the management backend (`go/tun/main`) activates ORM services. The
   relays and the edge never touch Postgres. They use vnic RPC (GET, POST,
-  PATCH, DELETE) and service change notifications (`IServiceCacheListener`)
-  over the vnet.
+  PATCH, DELETE) over the vnet.
+- **Pushing changes to the data plane (§16.2).** Layer 8 has no
+  subscription for a process that doesn't own a service. So each owner's
+  `After()` hook multicasts every change to two small **listener services**:
+  `TunRlyCtl`, activated by every relay, and `EdgeCtl`, activated by every
+  edge. This is the l8pollaris pattern, where `TargetCallback` multicasts to
+  its collectors. At startup and every 60 s the relays and the edge also
+  re-read everything with GETs, so a missed multicast heals itself.
 - Every in-memory service also has exactly one owner process. The live
   tables (`TunLive`, `TunAgent`, `TunRelay`) are owned by a dedicated single-replica
   **registry** process, not by the relays (§4.2).
 - All users, roles and permissions go through `ISecurityProvider` (l8secure,
-  loaded as a plugin). The relays and the edge join the vnet with
-  service-account credentials from the security config JSON. The UI goes
-  through l8web bearer-token auth. The project never imports l8secure.
+  loaded as a plugin). Processes join the vnet with the project's shared
+  secret and key, and the provider trusts vnet members without role checks
+  (§16.3). The vnet membership is therefore the trust boundary between
+  processes, and roles apply to UI users, who come in through l8web
+  bearer-token auth. The project never imports l8secure.
 - The relays' own access control for tunnel traffic (agent tokens,
   visitors' basic auth and OIDC, gateway keys) is **product functionality
   applied to third-party traffic**, not Layer 8 AAA. §5.7 defines its
@@ -159,7 +167,7 @@ tables.
 | `protocol` | `TLS` (routed by SNI, so several domains can share a port), `HTTP` (routed by `Host`, shareable), or `TCP` (no name to route by, so the port belongs to this domain alone) |
 | `mode` | `TERMINATE` (decrypt with this domain's certificate, reverse-proxy HTTP), `PASSTHROUGH` (forward the encrypted bytes untouched) or `RELAY` (only on the `TUNNEL_BASE` row) |
 | `target_kind` | `TARGETS` (the explicit list below), `DNS` (every A record of `target_dns`, for headless Services and DaemonSets), `NODE_LOCAL` (the edge's own node IP, which is what the l8web proxy does with `NODE_IP`), or `RELAYS` (only on `TUNNEL_BASE`) |
-| `targets` | For `TARGETS`: the load-balanced pool, as repeated `EdgeTarget {host, port, weight, enabled}`, for example `192.168.1.120:2443 ×1`, `192.168.1.121:2443 ×1`, `192.168.1.122:2444 ×2`. Each member has its own IP **and** port. Disabling one takes it out of rotation without deleting it |
+| `targets` | For `TARGETS`: the load-balanced pool, as `repeated string` entries `host:port` or `host:port*weight`, for example `192.168.1.120:2443`, `192.168.1.121:2443`, `192.168.1.122:2444*2`. Each member has its own IP **and** port. A leading `!` (`!192.168.1.121:2443`) disables a member without deleting it. The callback parses and validates every entry (§16.6) |
 | `target_dns`, `target_port` | For `DNS` and `NODE_LOCAL`: the name and the port, for example `2443` |
 | `backend_scheme`, `skip_verify` | For TERMINATE: `HTTPS` or `HTTP` to the backend. Certificate verification is on unless `skip_verify` is set (shown as a warning) |
 | `proxy_protocol` | Send PROXY v2 to the backend (PASSTHROUGH and TCP) |
@@ -296,10 +304,10 @@ stale table costs one extra hop and never fails a connection.
 ### 3.6 Configuration, certificates and caching
 
 - **Loading domains.** The edge loads `EdgeDomain` rows over vnic at
-  startup and applies change notifications.
+  startup, applies the changes the backend pushes to its `EdgeCtl` listener,
+  and re-reads everything every 60 s.
 - **Loading certificates.** For every domain with a certificate, the edge
-  downloads the chain and key from FileStore over vnic (its service account
-  may download; §5.6). It loads them into `certs.ModeStaticSet` (§3.7), and
+  downloads the chain and key from FileStore over vnic (§16.4). It loads them into `certs.ModeStaticSet` (§3.7), and
   reloads on every change to a domain's storage paths.
 - **Cache for resilience.** The last good set is written to
   `/data/edge-cache/`: the domains as JSON, and certificates and keys as
@@ -410,13 +418,15 @@ validation code.
   `TunRelay` are activated in **exactly one process**: the registry
   (`go/tun/registry`, a StatefulSet with one replica).
   - Relays, the edge, the backend and the UI never activate these services.
-    They use vnic RPC and change notifications only.
+    They use vnic RPC. The registry's `After()` pushes the changes relays
+    and edges act on (takeovers, disconnects, drains) to `TunRlyCtl` and
+    `EdgeCtl` (§16.2).
   - The registry has no database and doesn't depend on the management
     backend or Postgres. New agent registrations keep working while the
     management plane is down.
 - **Registry restart.** The state is rebuilt, not persisted.
-  - On startup the registry multicasts a re-announce request, and every relay
-    re-POSTs its active and grace records. The registry's `/readyz` stays
+  - On startup the registry multicasts a re-announce request to `TunRlyCtl`,
+    and every relay re-POSTs its agents and its active and grace records. The registry's `/readyz` stays
     false until all relays known from their heartbeats have re-announced, or
     for up to 15 s.
   - Existing tunnels keep carrying traffic throughout; relays keep their own
@@ -563,7 +573,9 @@ ServiceName ≤ 10 characters; one ServiceArea per module.
 | access (40) | `TunAgCert` | `TunAgentCert` | `certId` (the serial) | ORM | backend |
 | access (40) | `TunIssue` | `TunIssueRequest` (request/response only, not persisted) | — | none | backend |
 | edge (41) | `EdgeDomain` | `EdgeDomain` | `domainId` | ORM | backend |
-| system (0) | `FileStore` (l8services, not project code) | uploaded certificate and key files | `storagePath` | encrypted files on `/data/l8files` | backend |
+| system (0) | `FileStore` (l8services, not project code) | uploaded certificate and key files | `storagePath` | encrypted files on `/data/l8files` | web UI process (§16.4) |
+| live (42) | `TunRlyCtl` | listener only: receives pushed changes (tokens, reservations, gateway keys, certificates, takeovers, disconnects, drains, re-announce) | — | none | every relay (§16.2) |
+| edge (41) | `EdgeCtl` | listener only: receives pushed `EdgeDomain`, `TunLive` and `TunRelay` changes | — | none | every edge (§16.2) |
 | edge (41) | `EdgeNode` | `EdgeNode` | `edgeId` | in-memory, TTL | backend |
 | live (42) | `TunLive` | `TunLiveTunnel` | `tunnelId` | in-memory | registry (§4.2) |
 | live (42) | `TunAgent` | `TunAgent` | `agentId` | in-memory | registry (§4.2a) |
@@ -575,8 +587,8 @@ generator of their own):
 
 - `TunTokenPolicy` and `TunPortRange` in `TunToken`
 - `TunGatewayGrant` in `TunGatewayKey`
-- `EdgePortForward` in `EdgeDomain` (the port forwarding table), and
-  `EdgeTarget` in `EdgePortForward` (the load-balancing pool)
+- `EdgePortForward` in `EdgeDomain` (the port forwarding table), with its
+  load-balancing pool as a `repeated string targets` field (§16.6)
 - `EdgeBackendStatus` in `EdgeNode`
 
 **References between Prime Objects** are ID strings only, for example
@@ -649,8 +661,10 @@ Plaintext secrets never reach the ORM or the event log.
   - **Events.** Certificate uploads and replacements post events. The
     certificate summary feeds `CERT_EXPIRING` (§5.5).
 - **`TunLive`, `TunAgent`, `TunRelay`, `EdgeNode` and simulated records:**
-  - Each type has a `simulated` boolean. Only the `mock` service account
-    may set it (the security config enforces this).
+  - Each type has a `simulated` boolean. It is accepted only when the
+    owning process runs with `L8TUNNEL_ALLOW_SIMULATED=true`, which only
+    `run-local.sh` and the KIND manifests set. Everywhere else a simulated
+    record is refused (§16.3).
   - Simulated records are exempt from heartbeat expiry, never take part in
     claims against real tunnels (they use names under the reserved `demo-`
     prefix), and are ignored by the edge's route resolution and the relays.
@@ -720,22 +734,17 @@ The project never activates `Events` itself (l8common does), and the UI
     domains and port forwards (not certificate upload); cannot issue tokens or
     certificates
   - `viewer`: read-only
-  - `relay` (service account): read `TunToken` including `secretHash`; read
-    reservations, gateway keys, certificates and edge domains; download the
-    `TUNNEL_BASE` certificate and key from FileStore; write `TunLive`, `TunAgent` and
-    `TunRelay`
-  - `edge` (service account): read edge domains, `TunLive` and `TunRelay`;
-    download certificates and keys from FileStore; write
-    `EdgeNode`
-  - `registry` (service account): read reservations and edge domains, for claim
-    checks
-  - `mock` (service account, only in `run-local.sh` and KIND): write
-    simulated live records and seed configuration objects
-- **Deny rules** blank `secretHash` for everyone except `relay`.
-- **FileStore:** upload (POST) is allowed for `admin` only. Download (PUT)
-  is allowed only for `admin` and the `edge`, `relay` and `backend` service
-  accounts. So operators and viewers can see a domain's certificate summary
-  but can never fetch a private key. The UI never offers a key download.
+  - The relays, edge, registry and backend need no roles. They're vnet
+    members, which l8secure trusts (§16.3). The vnet's ports aren't
+    forwarded on the router, and joining needs the shared secret.
+  - Mock data is uploaded over REST as a normal `admin` user.
+- **Deny rules** blank `secretHash` for every UI user. Relays read it over
+  the vnet.
+- **FileStore:** the rules are action-level on the message types. Upload
+  (`L8FileUploadRequest`) and download (`L8FileDownloadRequest`) are
+  allowed for `admin` only. Operators and viewers see a domain's certificate
+  summary but can never fetch a private key, and the UI never offers a key
+  download. The edge and relays download over the vnet.
 - **Provisioning** of users and roles goes only through the config JSON or
   the Security API (area 73), including from the mock data. There's no
   project-owned users service, and the project never imports l8secure.
@@ -761,8 +770,9 @@ puts that line in writing.
 - Only the §5.6 roles apply. Users are provisioned only through the security
   config JSON or the Security API (area 73).
 - Every management action is recorded as an event.
-- The relays, the edge and the registry are ordinary vnic clients with
-  service-account credentials. They get no privileges outside their roles.
+- The relays, the edge and the registry are vnet members, authenticated by
+  the project's shared secret and key (§16.3). They expose no management
+  API of their own.
 
 **Data plane: the product's own access control for third-party traffic
 (exceptions X-1 and X-2, §15).**
@@ -830,7 +840,7 @@ section is config, enums, columns, forms and init, and init calls
 | Access ▸ Reservations | `TunReservation` | CRUD, token reference picker | Same | |
 | Access ▸ Gateway keys | `TunGatewayKey` | CRUD, grants as an inline table | Same | |
 | Access ▸ Agent certificates | `TunAgentCert` | List + **Issue certificate** (shown once, downloaded as PEM) + revoke (PATCH) | Same | |
-| Edge ▸ Domains | `EdgeDomain` | **Domain table**: domain, aliases, kind, certificate status (a colored badge with days to expiry), number of port forwards, and applied-on-all-edges. **Detail form:**<br>• **General:** domain, aliases, enabled, IP lists.<br>• **Certificate:** two `f.file` fields, the certificate chain and the private key (`Layer8FileUpload`, POST to `/0/FileStore`), plus the read-only summary (subject, SANs, issuer, expiry, fingerprint, status). The certificate can be downloaded; the private key can't.<br>• **Port forwarding:** `f.inlineTable('portForwards', …)` with listen port (and range end), protocol, mode, target kind, LB algorithm, number of healthy/total members, backend scheme, skip-verify (with a warning), PROXY v2, health type and path, and enabled. Clicking a port-forward row opens its detail in a stacked popup, with a **Load-balancing targets** inline table (host or IP, port, weight, enabled) and the DNS name or port for the other target kinds.<br>The `TUNNEL_BASE` row's port forwards are read-only | Same, as mobile cards: domain list, then detail with the certificate upload and port-forward cards (`Layer8MForms` file fields, `Layer8MEditTable`) | Validation errors from the callback (for example "certificate doesn't cover www.probler.dev" or "port 9092 is TCP on another domain") are shown on the form |
+| Edge ▸ Domains | `EdgeDomain` | **Domain table**: domain, aliases, kind, certificate status (a colored badge with days to expiry), number of port forwards, and applied-on-all-edges. **Detail form:**<br>• **General:** domain, aliases, enabled, IP lists.<br>• **Certificate:** two `f.file` fields, the certificate chain and the private key (`Layer8FileUpload`, POST to `/0/FileStore`), plus the read-only summary (subject, SANs, issuer, expiry, fingerprint, status). The certificate can be downloaded; the private key can't.<br>• **Port forwarding:** `f.inlineTable('portForwards', …)` with listen port (and range end), protocol, mode, target kind, LB algorithm, number of healthy/total members, backend scheme, skip-verify (with a warning), PROXY v2, health type and path, and enabled. Each port-forward row's **targets** are edited as tags (`f.tags`), one `host:port` or `host:port*weight` tag per member, with `!` to disable one; the DNS name and port are plain fields for the other target kinds.<br>The `TUNNEL_BASE` row's port forwards are read-only | Same, as mobile cards: domain list, then detail with the certificate upload and port-forward cards (`Layer8MForms` file fields, `Layer8MEditTable`) | Validation errors from the callback (for example "certificate doesn't cover www.probler.dev" or "port 9092 is TCP on another domain") are shown on the form |
 | Edge ▸ Router ports | `EdgeNode` (listener status) | A read-only table of every public port the edge listens on: port or range, protocol, domains, and bound or error. This is the list of ports to forward on the home router | Same | Derived from the edge's report, so it shows what's really bound, not only what's configured |
 | Alerts ▸ Rules | `TunAlertRule` | CRUD; targets use `l8notify-target-editor.js` | Same | |
 | System | built-in | l8ui SYS: health, security (users and roles), modules, logs (L8Logs), data import; Events (`l8ui/events/`); Notify integrations and delivery log (`l8ui/notify/`) | Mobile SYS equivalents | |
@@ -853,7 +863,7 @@ project's own base image. `build.sh` in each binary's directory runs
 | Image | Directory | Base | Local | Bare-metal / KIND | GKE |
 |---|---|---|---|---|---|
 | `saichler/l8tunnel` | `go/tun/main` | `l8tunnel-postgres` | StatefulSet | StatefulSet + volumeClaimTemplates | StatefulSet, shared PVC |
-| `saichler/l8tunnel-web` | `go/tun/ui` | `l8tunnel-security` | DaemonSet (hostNetwork) | StatefulSet + anti-affinity | DaemonSet |
+| `saichler/l8tunnel-web` | `go/tun/ui` | `l8tunnel-security` | DaemonSet (hostNetwork, nodeSelector `l8tunnel.io/edge: "true"`, so exactly one instance; §16.4) | StatefulSet (1) + anti-affinity + nodeSelector | DaemonSet with the same nodeSelector |
 | `saichler/l8tunnel-vnet` | `go/tun/vnet` | `l8tunnel-security` | DaemonSet (hostNetwork) | StatefulSet + anti-affinity | DaemonSet |
 | `saichler/l8tunnel-registry` | `go/tun/registry` | `l8tunnel-security` | StatefulSet (1 replica) | StatefulSet (1) + volumeClaimTemplates | StatefulSet (1), shared PVC |
 | `saichler/l8tunnel-relay` | `go/tun/relay` | `l8tunnel-security` | Deployment (2 replicas) | StatefulSet (2) + volumeClaimTemplates | Deployment |
@@ -1016,10 +1026,8 @@ when you ask.
   2. Change-notification subscription from a non-owner vnic.
   3. `common.GenerateID` semantics on a preset ID, for import.
   4. Vnet, web and log ports free on the shared cluster.
-  5. l8ui editing of a child list inside a child row (the `EdgeTarget` list
-     inside an `EdgePortForward` row) through a stacked popup, on desktop
-     and mobile. The fallback is a `targets` text field in
-     `host:port[×weight]` form, validated by the callback.
+  5. l8ui editing of a child list inside a child row. **Outcome:** not
+     supported (§16.6), so targets are a tags field.
 - Record the outcomes in this plan before K1.
 
 **K1 — Model and management backend**
@@ -1028,11 +1036,12 @@ when you ask.
 - `go/tun/common`; the ORM services and callbacks (access, edge domains
   with port forwards and certificate validation, alerts); `TunIssue`;
   `EdgeNode`; the `simulated` flag and its rules.
-- FileStore activated in the backend (the single owner, storage on
-  `/data/l8files`) and the FileStore permission rules; creating the
-  `TUNNEL_BASE` row at first start.
-- The security config JSON in l8secure, including the `relay`, `edge`,
-  `registry` and `mock` service accounts; `go/tun/main` and `go/tun/vnet`.
+- The FileStore permission rules; FileStore itself runs in the web process
+  (§16.4). Creating the `TUNNEL_BASE` row at first start.
+- The listener services `TunRlyCtl` and `EdgeCtl`, and the owners'
+  `After()` multicasts to them (§16.2).
+- The security config JSON in l8secure (sysconfig ports from §16.5, roles,
+  deny rules); `go/tun/main` and `go/tun/vnet`.
 - Registering events and notify types.
 
 **K2 — Relay cluster mode**
@@ -1179,7 +1188,8 @@ Platforms:
 | 9 | §5.3 | TunIssue (token, certificate, import) | Go-mgmt | K1 |
 | 10 | §5.3 | EdgeDomain (port forwards, certificate validation via FileStore, TUNNEL_BASE row) and EdgeNode services; `simulated` flag rules | Go-mgmt | K1 |
 | 10a | §5.6 | FileStore activation in the backend; upload and download permissions (no key download for operators and viewers) | Go-mgmt | K1 |
-| 11 | §5.6 | Security config JSON, roles, deny rules, service accounts | Go-mgmt | K1 |
+| 11 | §5.6 | Security config JSON, sysconfig ports, roles, deny rules, FileStore rules | Go-mgmt | K1 |
+| 11a | §16.2 | Listener services TunRlyCtl and EdgeCtl, owners' After() multicasts, 60 s re-read | Go-mgmt, Go-relay, Go-edge | K1, K2, K3 |
 | 12 | §5.4 | Events types registered; backend events | Go-mgmt | K1 |
 | 13 | §4.1 | Accounts over vnic with a snapshot; revocation propagation | Go-relay | K2 |
 | 14 | §4.2 | Registry as single owner of TunLive/TunAgent/TunRelay: claims, port allocation, takeover, grace, lost relay, re-announce | Go-relay | K2 |
@@ -1313,3 +1323,162 @@ Everything not listed here complies.
 
 All five are copied into the PRD in K6, so the exceptions stay visible
 after this plan is done.
+
+## 16. K0 outcomes (recorded 2026-09-25, before K1)
+
+### 16.1 Code delivered in K0 (no behavior change for existing setups)
+
+| Item | Result |
+|---|---|
+| `tunnel/sni` | The ClientHello peek moved out of the relay into its own package. It works on any `net.Conn`, keeps the replay-safe `WriteTo`, and adds `ReadFrom` so TCP writes keep the splice fast path |
+| `tunnel/registry` | The name, reservation and port rules and the claim decision (new, reclaim, takeover) moved out of the relay. The relay calls them, and the `TunLive` callback will call the same code. Error messages are unchanged |
+| PROXY protocol | `transport.ProxyProtocolListener` wraps every relay listener: control, HTTP, SSH gateway and mode A ports. Headers are used only from `trusted_proxies`, refused from anywhere else, and not parsed at all when none are configured. Library `github.com/pires/go-proxyproto` v0.15.0 |
+| Health | `OpsHandler`: `/metrics`, `/healthz`, `/readyz` on the `metrics.listen` address |
+| Tests | 6 new end-to-end tests (PROXY from trusted and untrusted sources, mode A behind a proxy, no parsing without trusted proxies, probes, config) plus the whole existing suite, green with `-race` |
+| Deferred to K2 | The `relay.Accounts` / `relay.Registry` interfaces are introduced together with their first cluster implementation, not ahead of it. Defining them with no second implementation would have been speculative code |
+| Small fix | `Reserve` now also refuses the OIDC login host's name, as tunnel registration always did |
+
+### 16.2 Pushing changes to relays and edges
+
+Spike 2 found that Layer 8 has no subscription mechanism for a process that
+doesn't own a service:
+
+- Built-in notifications only reach processes that activate the same
+  service.
+- ORM services don't notify peers at all.
+
+The design therefore uses the l8pollaris pattern (`TargetCallback`
+multicasting to its collectors):
+
+- Two **listener services** carry the changes: `TunRlyCtl` (area 42) in
+  every relay, and `EdgeCtl` (area 41) in every edge. They are stateless,
+  with no store and no UI.
+- The owners (the backend's ORM callbacks and the registry's callbacks)
+  call `vnic.Multicast(listener, area, action, elem)` in `After()` when the
+  change isn't itself a notification.
+- The listeners apply each change to their local copy. Examples: a token
+  deleted means its sessions are dropped; a takeover elsewhere means the
+  stale session is closed; a drain request starts the drain; an
+  `EdgeDomain` change reloads routes and certificates.
+- **Resync.** At startup, and every 60 s, relays and edges re-read
+  everything with `vnic.Request` GETs. A lost multicast is therefore healed
+  within a minute. Revocation still takes effect immediately in the normal
+  case.
+
+### 16.3 Security model between processes
+
+Spike 6 found how l8secure treats processes:
+
+- Processes join the vnet by proving the project's shared secret, encrypted
+  with the project key.
+- Their requests carry a short alias ID, and l8secure's `CanDoAction`
+  allows those without role checks. Roles are checked only for UI users
+  coming through l8web bearer tokens.
+
+What that changes in the plan:
+
+- No `relay`, `edge`, `registry` or `mock` roles. Vnet membership is the
+  trust boundary between processes. The vnet ports (§16.5) are never
+  forwarded on the router.
+- `simulated` records are gated by the `L8TUNNEL_ALLOW_SIMULATED=true`
+  environment variable on the owning process (set only by `run-local.sh`
+  and the KIND manifests), not by a role.
+- The `secretHash` field-deny rule protects it from every UI user.
+
+### 16.4 FileStore
+
+Spike 5 found:
+
+- **Where it runs.** `filestore.Activate` is called by l8common's
+  `CreateWebServer`, so FileStore runs in the **web UI process** and stores
+  files under that process's `/data/l8files`.
+- **Sizes and paths.** Uploads are limited to 5 MB. The POST returns
+  `storagePath`, `fileName`, `fileSize`, `mimeType` and `checksum`; the PUT
+  downloads by `storagePath`.
+- **Access control.** It is action-level only, on the message types
+  `L8FileUploadRequest` and `L8FileDownloadRequest`. There is no per-file
+  ACL.
+
+What that changes in the plan:
+
+- **One web instance.** The web UI (and so FileStore) must be a single
+  instance, or files would land on whichever node took the upload.
+  `l8tunnel-web` is pinned with the edge's node label in every mode (§7.1),
+  and the backend doesn't activate FileStore itself.
+- **Certificate files.** The `EdgeDomain` callback accepts only storage
+  paths under `/data/l8files/edgecert/`, and uploads use that document ID.
+- **Framework bugs to report** (ReportInfraBugs, not fixed here: l8services
+  isn't this project's code):
+  1. `FileStorePost` doesn't sanitize `fileName` / `documentId`, so `../`
+     can write outside the storage root.
+  2. `FileStorePut`'s prefix check has no trailing separator, so
+     `/data/l8files2/...` passes.
+
+  Until they're fixed, the upload permission stays admin-only.
+
+### 16.5 Ports (none collide with probler or l8erp)
+
+| Component | Port | Notes |
+|---|---|---|
+| l8tunnel vnet | 29000 TCP, and 28998 UDP (discovery is always vnet port − 2) | probler uses 26000/25998, l8erp 48884/48882 |
+| l8tunnel log vnet | 29010 TCP, and 29008 UDP | probler 27000, l8erp 48891 |
+| l8tunnel web UI | 5443 | probler 2443, l8erp 2773 |
+| Edge public ports | 443, 80, 22000–22999, 2222, plus any added in Edge ▸ Domains | 443/80 are currently held by the systemd relay on k8s-node-2 (§7.5 step 4) |
+
+- **Where the ports are set.** They go in the `sysconfig` of
+  `l8secure/go/secure/plugin/l8tunnel/l8tunnel.json` (`vnetPort`,
+  `logConfig.vnetPort`, `webConfig.webPort`). Layer 8 has no environment
+  variable or flag for them.
+- **YAML note.** The `containerPort` values in the probler and l8erp YAMLs
+  don't match their real ports; with `hostNetwork` they have no effect.
+  l8tunnel's YAMLs list the real ones.
+
+### 16.6 l8ui: editing a list inside a child row
+
+Spike 5 (l8ui) found that a child list inside an inline-table row can't
+be edited today, on desktop or mobile:
+
+- The row editor renders the nested table but never wires its buttons.
+- No project edits a grandchild list.
+
+What that changes in the plan:
+
+- **Targets as tags.** `EdgePortForward.targets` is a `repeated string` of
+  `host:port[*weight]` entries (`!` prefix disables one), edited with
+  `f.tags`, which works on both platforms today. The callback parses and
+  validates every entry and rejects bad ones with a clear message. There is
+  no `EdgeTarget` message.
+- **Framework limitation to report:**
+  - mobile: `_openMobileRowEditor` should pass `miniFormDef` to
+    `initFormFields`
+  - desktop: `openRowEditor`'s `onShow` should attach inline-table handlers
+    that look up fields in the mini form
+
+### 16.7 Other answers
+
+- **ID generation.** `common.GenerateID` keeps a preset ID, so import keeps
+  token IDs through a plain POST.
+- **In-memory services.** They use `base.BaseService` with
+  `ifs.NewServiceLevelAgreement(..., stateful=true, callback)`,
+  non-transactional, and `sla.SetWebService(web.New(...))` for REST. This
+  is the pattern of the l8bus Health service.
+  - L8Query GETs are served from the cache without calling the callback.
+  - Realtime tables work, because non-transactional services multicast the
+    websocket notifications.
+- **Calling services.** Timeouts on `vnic.Request` are in seconds.
+
+### 16.8 Open question: where the cluster runs
+
+k8s-node-2 (192.168.1.120) runs **no Kubernetes**: no kubelet, containerd,
+Docker or kubectl. It only runs the systemd relay and sshd.
+
+- The one non-KIND context in this laptop's kubeconfig
+  (`kubernetes-admin@kubernetes`, 192.168.86.223:6443) isn't reachable.
+- KIND works locally, which is enough for K1–K8 development and the
+  browser tests.
+
+**Before the K8 production cutover, you need to decide one of:**
+
+- install Kubernetes on k8s-node-2 (and any other nodes)
+- point the router at an existing cluster's node
+- run the cluster elsewhere

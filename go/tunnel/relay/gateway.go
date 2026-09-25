@@ -145,7 +145,7 @@ func (s *Server) gatewayTarget(sconn *ssh.ServerConn, req directTCPIP) (*tunnel,
 	if !strings.Contains(host, ".") {
 		host += "." + s.cfg.BaseDomain
 	}
-	name := s.tunnelName(host)
+	name := s.rules.TunnelName(host)
 	if name == "" {
 		return nil, "unknown tunnel " + req.Host
 	}

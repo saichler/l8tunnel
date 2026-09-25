@@ -164,7 +164,12 @@ l8tunnel-agent status               # the agent's connection and tunnels
 
 - **Metrics:** `metrics: {listen: 127.0.0.1:9100}` serves Prometheus metrics
   (`l8tunnel_agents_connected`, `l8tunnel_tunnel_bytes_in_total`,
-  `l8tunnel_agent_rtt_seconds`, `l8tunnel_auth_failures_total`, ...).
+  `l8tunnel_agent_rtt_seconds`, `l8tunnel_auth_failures_total`, ...) at
+  `/metrics`, plus `/healthz` and `/readyz` for health checks.
+- **Behind a proxy:** `trusted_proxies: [10.0.0.0/8]` makes the relay read
+  PROXY protocol headers from those addresses, so IP lists, rate limits,
+  logs and `X-Forwarded-For` see the real client IP. Headers from anywhere
+  else are refused.
 - **Logs:** `log: {format: json, level: info}`; every public connection is
   logged with client, tunnel, duration and bytes; `access_log: true` logs
   every HTTP request.

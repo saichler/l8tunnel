@@ -51,7 +51,11 @@ tls:
 #   level: info                      # debug, info, warn, error
 # access_log: false                  # one line per HTTP tunnel request
 # metrics:
-#   listen: 127.0.0.1:9100           # Prometheus metrics; empty disables
+#   listen: 127.0.0.1:9100           # /metrics (Prometheus), /healthz and /readyz; empty disables
+
+# trusted_proxies:                   # PROXY protocol headers are believed only from these
+#   - 10.0.0.0/8                     # (an edge proxy or load balancer in front of the relay);
+#                                    # client IPs then come from the header
 
 # ssh_gateway:                       # ssh -J gw@tunnel.example.com:2222 user@<tunnel>
 #   listen: ":2222"

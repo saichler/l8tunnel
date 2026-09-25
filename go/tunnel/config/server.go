@@ -20,6 +20,7 @@ import (
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 	"github.com/saichler/l8tunnel/go/tunnel/relay"
 	"github.com/saichler/l8tunnel/go/tunnel/store"
+	"github.com/saichler/l8tunnel/go/tunnel/transport"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -94,6 +95,9 @@ type ServerFile struct {
 	} `yaml:"ssh_gateway"`
 	// OIDC enables "sign in with ..." for http tunnels.
 	OIDC *OIDCFile `yaml:"oidc"`
+	// TrustedProxies are addresses or CIDRs whose PROXY protocol headers
+	// are believed (an edge proxy or load balancer in front of the relay).
+	TrustedProxies []string `yaml:"trusted_proxies"`
 	// RateLimits are per client IP; zero values mean the relay defaults.
 	RateLimits struct {
 		ConnectionsPerSecond  float64 `yaml:"connections_per_second"`
@@ -334,6 +338,10 @@ func (f *ServerFile) relayConfig(logger *slog.Logger) (relay.Config, error) {
 	if err != nil {
 		return relay.Config{}, fmt.Errorf("tcp_port_range: %w", err)
 	}
+	trusted, err := transport.ParsePrefixes(f.TrustedProxies)
+	if err != nil {
+		return relay.Config{}, fmt.Errorf("trusted_proxies: %w", err)
+	}
 	listen := f.Listen.HTTPS
 	if listen == "" {
 		listen = defaultListen
@@ -358,6 +366,7 @@ func (f *ServerFile) relayConfig(logger *slog.Logger) (relay.Config, error) {
 			ConnectionsBurst:      f.RateLimits.ConnectionsBurst,
 			AuthFailuresPerMinute: f.RateLimits.AuthFailuresPerMinute,
 		},
+		TrustedProxies:    trusted,
 		PublicHost:        f.PublicHost,
 		ReservedNames:     f.ReservedNames,
 		BindHost:          f.Bind,

@@ -1,4 +1,7 @@
-package relay
+// Package sni reads the TLS ClientHello of a connection without consuming
+// it, so the connection can then be routed by server name and ALPN: handed
+// to tls.Server (termination) or forwarded as raw bytes (passthrough).
+package sni
 
 import (
 	"bytes"
@@ -9,34 +12,52 @@ import (
 	"time"
 )
 
-// prefixConn replays bytes already read from a TCP connection before
-// reading further from it. Writes and CloseWrite go to the TCP connection.
-type prefixConn struct {
-	*net.TCPConn
+// Conn replays the bytes already read from a connection before reading
+// further from it. Writes, CloseWrite and addresses go to the underlying
+// connection.
+type Conn struct {
+	net.Conn
 	r io.Reader
 }
 
-func (c *prefixConn) Read(p []byte) (int, error) {
+// Read reads the replayed bytes first, then the underlying connection.
+func (c *Conn) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
-// WriteTo overrides the embedded TCPConn's WriteTo, which io.Copy would
-// otherwise use to read straight from the socket, skipping the replayed
-// bytes.
-func (c *prefixConn) WriteTo(w io.Writer) (int64, error) {
+// WriteTo keeps io.Copy from reading straight from the underlying socket
+// (which would skip the replayed bytes) if the embedded connection ever
+// exposes a WriteTo of its own.
+func (c *Conn) WriteTo(w io.Writer) (int64, error) {
 	return io.Copy(w, struct{ io.Reader }{c.r})
 }
 
-// peekClientHello reads the TLS ClientHello from conn without consuming
-// it: the returned connection replays the hello, so it can be handed to
-// tls.Server (termination) or forwarded as raw bytes (passthrough).
-func peekClientHello(conn *net.TCPConn) (*tls.ClientHelloInfo, *prefixConn, error) {
+// ReadFrom lets io.Copy use the underlying connection's fast path (splice
+// on TCP) for writes, which the replay doesn't affect.
+func (c *Conn) ReadFrom(r io.Reader) (int64, error) {
+	if rf, ok := c.Conn.(io.ReaderFrom); ok {
+		return rf.ReadFrom(r)
+	}
+	return io.Copy(struct{ io.Writer }{c.Conn}, r)
+}
+
+// CloseWrite half-closes the underlying connection.
+func (c *Conn) CloseWrite() error {
+	if hc, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return hc.CloseWrite()
+	}
+	return errors.ErrUnsupported
+}
+
+// Peek reads the TLS ClientHello from conn. The returned connection
+// replays it, so nothing is lost for the next reader.
+func Peek(conn net.Conn) (*tls.ClientHelloInfo, *Conn, error) {
 	var peeked bytes.Buffer
 	hello, err := readClientHello(io.TeeReader(conn, &peeked))
 	if err != nil {
 		return nil, nil, err
 	}
-	return hello, &prefixConn{TCPConn: conn, r: io.MultiReader(&peeked, conn)}, nil
+	return hello, &Conn{Conn: conn, r: io.MultiReader(&peeked, conn)}, nil
 }
 
 var errHelloRead = errors.New("client hello read")

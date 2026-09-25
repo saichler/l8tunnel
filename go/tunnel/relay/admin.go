@@ -11,6 +11,7 @@ import (
 
 	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
+	"github.com/saichler/l8tunnel/go/tunnel/registry"
 )
 
 // remoteIP extracts the IP of a TCP peer address.
@@ -69,19 +70,13 @@ func (s *Server) DisconnectToken(tokenID string) int {
 // Reserve permanently binds a tunnel name (and optionally a tcp/ssh public
 // port) to a token. Call it after storing the reservation.
 func (s *Server) Reserve(name, tokenID string, port int) error {
-	if !namePattern.MatchString(name) {
-		return fmt.Errorf("tunnel name %q must be a lowercase DNS label", name)
-	}
-	if name+"."+s.cfg.BaseDomain == s.cfg.ControlSNI || s.isReservedName(name) {
-		return fmt.Errorf("tunnel name %q is reserved for the relay", name)
-	}
-	if port != 0 && (port < s.cfg.TCPPortMin || port > s.cfg.TCPPortMax) {
-		return fmt.Errorf("port %d is outside the relay's range %d-%d", port, s.cfg.TCPPortMin, s.cfg.TCPPortMax)
+	if err := s.rules.CheckReservation(name, port); err != nil {
+		return err
 	}
 	switch err := s.registry.reserve(name, tokenID, port); {
-	case errors.Is(err, errNameTaken):
+	case errors.Is(err, registry.ErrNameTaken):
 		return fmt.Errorf("tunnel name %q is held by another token", name)
-	case errors.Is(err, errPortTaken):
+	case errors.Is(err, registry.ErrPortTaken):
 		return fmt.Errorf("port %d is held by another tunnel", port)
 	case err != nil:
 		return err

@@ -13,6 +13,7 @@ import (
 
 	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/httpproxy"
+	"github.com/saichler/l8tunnel/go/tunnel/registry"
 	"github.com/saichler/l8tunnel/go/tunnel/transport"
 )
 
@@ -24,7 +25,8 @@ import (
 type Server struct {
 	cfg      Config
 	log      *slog.Logger
-	registry *registry
+	registry *nameRegistry
+	rules    registry.Rules
 	routes   routeConfigs
 	http     *httpproxy.Proxy
 
@@ -56,7 +58,8 @@ func New(cfg Config) (*Server, error) {
 	s := &Server{
 		cfg:          cfg,
 		log:          cfg.Logger,
-		registry:     newRegistry(cfg.NameGracePeriod),
+		registry:     newNameRegistry(cfg.NameGracePeriod),
+		rules:        cfg.rules(),
 		routes:       newRouteConfigs(cfg.TLS, cfg.AgentCA),
 		sessions:     map[*agentSession]struct{}{},
 		gatewayConns: map[*ssh.ServerConn]struct{}{},
@@ -94,6 +97,7 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("relay: listen on %s: %w", s.cfg.ControlAddr, err)
 	}
+	ln = transport.ProxyProtocolListener(ln, s.cfg.TrustedProxies)
 	s.httpsPort = s.cfg.PublicHTTPSPort
 	if s.httpsPort == 0 {
 		s.httpsPort = ln.Addr().(*net.TCPAddr).Port
@@ -106,6 +110,7 @@ func (s *Server) Start() error {
 			return fmt.Errorf("relay: listen on %s: %w", s.cfg.HTTPAddr, err)
 		}
 		s.httpAddr = httpLn.Addr().String()
+		httpLn = transport.ProxyProtocolListener(httpLn, s.cfg.TrustedProxies)
 		s.httpServer = &http.Server{
 			Handler:           s.cfg.HTTPChallenge(httpproxy.RedirectHandler(s.httpsPort)),
 			ReadHeaderTimeout: 10 * time.Second,
@@ -128,6 +133,7 @@ func (s *Server) Start() error {
 			}
 			return fmt.Errorf("relay: SSH gateway listen on %s: %w", g.Listen, err)
 		}
+		gln = transport.ProxyProtocolListener(gln, s.cfg.TrustedProxies)
 		s.gatewayLn = gln
 		s.wg.Add(1)
 		go s.acceptGateway(gln, s.gatewaySSHConfig())
@@ -228,7 +234,7 @@ func (s *Server) acceptConns(ln net.Listener) {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			s.serveConn(conn.(*net.TCPConn))
+			s.serveConn(conn)
 		}()
 	}
 }

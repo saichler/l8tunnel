@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
 	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/httpproxy"
+	"github.com/saichler/l8tunnel/go/tunnel/registry"
 )
 
 const (
@@ -115,6 +117,11 @@ type Config struct {
 	ReservedNames []string
 	// RateLimits are per client IP.
 	RateLimits RateLimits
+	// TrustedProxies are the networks whose PROXY protocol headers are
+	// believed (for example an edge proxy in front of the relay). Client
+	// IPs then come from the header, for IP lists, rate limits, logs and
+	// X-Forwarded-For. Empty means PROXY headers aren't accepted at all.
+	TrustedProxies []netip.Prefix
 	// PublicHost is the host name reported in mode A public addresses;
 	// empty means BaseDomain.
 	PublicHost string
@@ -134,6 +141,21 @@ type Config struct {
 	Logger *slog.Logger
 }
 
+// rules are the name and port rules for a validated config.
+func (c *Config) rules() registry.Rules {
+	r := registry.Rules{
+		BaseDomain:    c.BaseDomain,
+		ControlSNI:    c.ControlSNI,
+		ReservedNames: c.ReservedNames,
+		PortMin:       c.TCPPortMin,
+		PortMax:       c.TCPPortMax,
+	}
+	if c.Login != nil {
+		r.AuthHost = strings.ToLower(c.Login.AuthHost())
+	}
+	return r
+}
+
 func (c *Config) validate() error {
 	if c.ControlAddr == "" {
 		return fmt.Errorf("relay: ControlAddr is required")
@@ -145,7 +167,7 @@ func (c *Config) validate() error {
 		return fmt.Errorf("relay: invalid PublicHTTPSPort %d", c.PublicHTTPSPort)
 	}
 	for _, n := range c.ReservedNames {
-		if !namePattern.MatchString(n) {
+		if !registry.ValidName(n) {
 			return fmt.Errorf("relay: reserved name %q must be a lowercase DNS label", n)
 		}
 	}

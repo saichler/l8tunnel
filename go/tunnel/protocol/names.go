@@ -56,6 +56,11 @@ func ParsePortRange(s string) (int, int, error) {
 
 var dnsLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
+// IsDNSLabel reports whether s is a lowercase DNS label.
+func IsDNSLabel(s string) bool {
+	return dnsLabel.MatchString(s)
+}
+
 // NormalizeDomain lowercases a domain name, drops a trailing dot, and
 // checks it is a valid host name with at least two labels (no wildcards).
 func NormalizeDomain(s string) (string, error) {

@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -147,6 +148,7 @@ tls:
   key: `+pki.keyFile+`
 heartbeat_interval: 150ms
 name_grace_period: 2m
+trusted_proxies: [10.0.0.0/8, 192.168.1.120]
 `)
 	f, err := config.LoadServerFile(path)
 	if err != nil {
@@ -157,7 +159,8 @@ name_grace_period: 2m
 		t.Fatal(err)
 	}
 	if cfg.HeartbeatInterval != 150*time.Millisecond || cfg.NameGracePeriod != 2*time.Minute ||
-		cfg.TCPPortMin != 30000 || cfg.TCPPortMax != 30010 {
+		cfg.TCPPortMin != 30000 || cfg.TCPPortMax != 30010 ||
+		fmt.Sprint(cfg.TrustedProxies) != "[10.0.0.0/8 192.168.1.120/32]" {
 		t.Fatalf("unexpected relay config %+v", cfg)
 	}
 	if _, err := f.NewRelay(t.Context(), testLogger(), newTestStore(t, auth.Policy{}), "test"); err != nil {
@@ -178,6 +181,13 @@ name_grace_period: 2m
 	}
 	if _, _, err := f.RelayConfig(t.Context(), testLogger()); err == nil {
 		t.Error("RelayConfig accepted a config without certificates")
+	}
+	f, err = config.LoadServerFile(writeFile(t, "server.yaml", "base_domain: tunnel.test\ntrusted_proxies: [edge]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.RelayConfig(t.Context(), testLogger()); err == nil || !strings.Contains(err.Error(), "trusted_proxies") {
+		t.Errorf("RelayConfig accepted an invalid trusted proxy: %v", err)
 	}
 }
 

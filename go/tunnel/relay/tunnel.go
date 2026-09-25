@@ -13,6 +13,8 @@ import (
 	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/pipe"
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
+	"github.com/saichler/l8tunnel/go/tunnel/registry"
+	"github.com/saichler/l8tunnel/go/tunnel/transport"
 	"github.com/saichler/l8tunnel/go/types/l8tunnel"
 )
 
@@ -25,7 +27,7 @@ type tunnel struct {
 	res       *reservation
 	existed   bool // the reservation was reclaimed, not newly created
 	endpoint  *l8tunnel.Endpoint
-	listener  *net.TCPListener // TCP/SSH without an access token
+	listener  net.Listener // TCP/SSH without an access token
 	access    *auth.Access
 	stats     tunnelStats
 	closeOnce sync.Once
@@ -63,7 +65,7 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 	if name == "" {
 		name = "t-" + protocol.RandomID(4)
 	}
-	if !namePattern.MatchString(name) {
+	if !registry.ValidName(name) {
 		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST,
 			"tunnel name %q must be a lowercase DNS label", name)
 	}
@@ -72,7 +74,7 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 			"token %q may not use the tunnel name %q", sess.token.Name, name)
 	}
 	hostname := name + "." + s.cfg.BaseDomain
-	if hostname == s.cfg.ControlSNI || (s.cfg.Login != nil && hostname == s.cfg.Login.AuthHost()) || s.isReservedName(name) {
+	if s.rules.IsReserved(name) {
 		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST,
 			"tunnel name %q is reserved for the relay", name)
 	}
@@ -82,7 +84,7 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 	}
 	res, existed, err := s.registry.claim(name, typ, sess.token.ID, sess.agentID, sess, policy.MaxTunnels)
 	switch {
-	case errors.Is(err, errMaxTunnels):
+	case errors.Is(err, registry.ErrMaxTunnels):
 		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_FORBIDDEN,
 			"token %q may have at most %d tunnels", sess.token.Name, policy.MaxTunnels)
 	case err != nil:
@@ -191,7 +193,7 @@ func (s *Server) httpsHost(host string) string {
 // reservation keeps its port unless a different one is requested;
 // otherwise the requested port, or the first free port in the relay's
 // range (narrowed by the token's policy), is used.
-func (s *Server) listenTunnelPort(res *reservation, requested int, policy auth.Policy) (*net.TCPListener, int, error) {
+func (s *Server) listenTunnelPort(res *reservation, requested int, policy auth.Policy) (net.Listener, int, error) {
 	held := s.registry.portOf(res)
 	if held != 0 && (requested == 0 || requested == held) {
 		ln, err := s.listen(held)
@@ -201,15 +203,12 @@ func (s *Server) listenTunnelPort(res *reservation, requested int, policy auth.P
 		}
 		return ln, held, nil
 	}
-	lo, hi, ok := policy.PortRange(s.cfg.TCPPortMin, s.cfg.TCPPortMax)
 	if requested != 0 {
-		if requested < s.cfg.TCPPortMin || requested > s.cfg.TCPPortMax {
-			return nil, 0, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_PORT_NOT_ALLOWED,
-				"port %d is outside the relay's range %d-%d", requested, s.cfg.TCPPortMin, s.cfg.TCPPortMax)
-		}
-		if !ok || requested < lo || requested > hi {
-			return nil, 0, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_FORBIDDEN,
-				"the token's policy doesn't allow port %d (allowed: %s)", requested, policy.Ports)
+		switch err := s.rules.CheckRequestedPort(requested, policy); {
+		case errors.Is(err, registry.ErrPortOutsideRange):
+			return nil, 0, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_PORT_NOT_ALLOWED, "%v", err)
+		case err != nil:
+			return nil, 0, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_FORBIDDEN, "%v", err)
 		}
 		ln, err := s.tryListen(requested)
 		if err != nil {
@@ -219,9 +218,9 @@ func (s *Server) listenTunnelPort(res *reservation, requested int, policy auth.P
 		s.registry.setPort(res, requested)
 		return ln, requested, nil
 	}
-	if !ok {
-		return nil, 0, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_FORBIDDEN,
-			"the token's port range %s doesn't overlap the relay's %d-%d", policy.Ports, s.cfg.TCPPortMin, s.cfg.TCPPortMax)
+	lo, hi, err := s.rules.AllocationRange(policy)
+	if err != nil {
+		return nil, 0, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_FORBIDDEN, "%v", err)
 	}
 	for port := lo; port <= hi; port++ {
 		if ln, err := s.tryListen(port); err == nil {
@@ -234,7 +233,7 @@ func (s *Server) listenTunnelPort(res *reservation, requested int, policy auth.P
 }
 
 // tryListen reserves port in the registry and binds it.
-func (s *Server) tryListen(port int) (*net.TCPListener, error) {
+func (s *Server) tryListen(port int) (net.Listener, error) {
 	if !s.registry.reservePort(port) {
 		return nil, fmt.Errorf("port %d is held by another tunnel", port)
 	}
@@ -246,19 +245,19 @@ func (s *Server) tryListen(port int) (*net.TCPListener, error) {
 	return ln, nil
 }
 
-func (s *Server) listen(port int) (*net.TCPListener, error) {
-	addr, err := net.ResolveTCPAddr("tcp", net.JoinHostPort(s.cfg.BindHost, strconv.Itoa(port)))
+func (s *Server) listen(port int) (net.Listener, error) {
+	ln, err := net.Listen("tcp", net.JoinHostPort(s.cfg.BindHost, strconv.Itoa(port)))
 	if err != nil {
 		return nil, err
 	}
-	return net.ListenTCP("tcp", addr)
+	return transport.ProxyProtocolListener(ln, s.cfg.TrustedProxies), nil
 }
 
 // serve accepts mode A connections on a TCP/SSH tunnel's public port.
 func (t *tunnel) serve() {
 	log := t.session.log.With("tunnel", t.endpoint.GetName())
 	for {
-		conn, err := t.listener.AcceptTCP()
+		accepted, err := t.listener.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return
@@ -267,11 +266,12 @@ func (t *tunnel) serve() {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		if !t.server.admit(conn.RemoteAddr(), t.access, log) {
-			conn.Close()
+		conn, ok := accepted.(pipe.Conn)
+		if !ok || !t.server.admit(accepted.RemoteAddr(), t.access, log) {
+			accepted.Close()
 			continue
 		}
-		t.server.goTracked(func() { t.forward(conn, conn.RemoteAddr().String()) })
+		t.server.goTracked(func() { t.forward(conn, accepted.RemoteAddr().String()) })
 	}
 }
 
@@ -331,13 +331,4 @@ func (t *tunnel) close() {
 		}
 		t.server.http.Forget(t.ID())
 	})
-}
-
-func (s *Server) isReservedName(name string) bool {
-	for _, n := range s.cfg.ReservedNames {
-		if n == name {
-			return true
-		}
-	}
-	return false
 }

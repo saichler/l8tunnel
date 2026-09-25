@@ -87,8 +87,8 @@ func serve(configPath string) error {
 	go admin.Serve(ctx, adminLn, admin.RelayHandler(srv, st, logger), logger)
 	logger.Info("admin socket listening", "path", file.AdminSocket())
 	if metricsLn != nil {
-		go admin.Serve(ctx, metricsLn, srv.MetricsHandler(), logger)
-		logger.Info("metrics listening", "addr", metricsLn.Addr().String())
+		go admin.Serve(ctx, metricsLn, srv.OpsHandler(), logger)
+		logger.Info("metrics and health endpoints listening", "addr", metricsLn.Addr().String())
 	}
 
 	<-ctx.Done()
