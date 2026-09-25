@@ -66,12 +66,12 @@ type relayEnv struct {
 }
 
 // startRelay starts a relay whose TCP tunnel range has n free ports.
-func startRelay(t *testing.T, n int) *relayEnv {
+func startRelay(t testing.TB, n int) *relayEnv {
 	t.Helper()
 	return startRelayWith(t, relayOpts{ports: n})
 }
 
-func startRelayWith(t *testing.T, opts relayOpts) *relayEnv {
+func startRelayWith(t testing.TB, opts relayOpts) *relayEnv {
 	t.Helper()
 	if opts.pki == nil {
 		opts.pki = newPKI(t)
@@ -139,7 +139,7 @@ func startRelayWith(t *testing.T, opts relayOpts) *relayEnv {
 
 // newTestStore opens a store holding the "test" and "other" tokens,
 // hashed with bcrypt's minimum cost to keep the tests fast.
-func newTestStore(t *testing.T, testPolicy auth.Policy) *store.Store {
+func newTestStore(t testing.TB, testPolicy auth.Policy) *store.Store {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "l8tunnel.db"))
 	if err != nil {
@@ -164,7 +164,7 @@ func newTestStore(t *testing.T, testPolicy auth.Policy) *store.Store {
 
 // restart closes the relay and starts a new one on the same control
 // address, port range and certificate.
-func (env *relayEnv) restart(t *testing.T) *relayEnv {
+func (env *relayEnv) restart(t testing.TB) *relayEnv {
 	t.Helper()
 	if err := env.srv.Close(); err != nil {
 		t.Fatal(err)
@@ -175,7 +175,7 @@ func (env *relayEnv) restart(t *testing.T) *relayEnv {
 }
 
 // freePortRange finds n consecutive ports on 127.0.0.1 that are free now.
-func freePortRange(t *testing.T, n int) (int, int) {
+func freePortRange(t testing.TB, n int) (int, int) {
 	t.Helper()
 	for attempt := 0; attempt < 100; attempt++ {
 		base := 20000 + mrand.Intn(40000)
@@ -204,13 +204,13 @@ type runningAgent struct {
 }
 
 // newAgent builds an agent for env with the given token and tunnels.
-func newAgent(t *testing.T, env *relayEnv, token string, tunnels ...agent.TunnelConfig) *agent.Agent {
+func newAgent(t testing.TB, env *relayEnv, token string, tunnels ...agent.TunnelConfig) *agent.Agent {
 	t.Helper()
 	return newAgentWithID(t, env, token, "", tunnels...)
 }
 
 // newAgentWithID is newAgent with a fixed agent ID ("" generates one).
-func newAgentWithID(t *testing.T, env *relayEnv, token, agentID string, tunnels ...agent.TunnelConfig) *agent.Agent {
+func newAgentWithID(t testing.TB, env *relayEnv, token, agentID string, tunnels ...agent.TunnelConfig) *agent.Agent {
 	t.Helper()
 	return newAgentWith(t, env, func(c *agent.Config) {
 		c.Token, c.AgentID, c.Tunnels = token, agentID, tunnels
@@ -218,7 +218,7 @@ func newAgentWithID(t *testing.T, env *relayEnv, token, agentID string, tunnels 
 }
 
 // newAgentWith builds a test agent for env; edit adjusts the config.
-func newAgentWith(t *testing.T, env *relayEnv, edit func(*agent.Config)) *agent.Agent {
+func newAgentWith(t testing.TB, env *relayEnv, edit func(*agent.Config)) *agent.Agent {
 	t.Helper()
 	tlsCfg, err := transport.ClientTLSConfig(controlSNI, env.pki.caFile)
 	if err != nil {
@@ -243,7 +243,7 @@ func newAgentWith(t *testing.T, env *relayEnv, edit func(*agent.Config)) *agent.
 }
 
 // runAgent starts a in the background without waiting for it to be ready.
-func runAgent(t *testing.T, a *agent.Agent) *runningAgent {
+func runAgent(t testing.TB, a *agent.Agent) *runningAgent {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	ra := &runningAgent{agent: a, cancel: cancel, done: make(chan error, 1)}
@@ -256,13 +256,13 @@ func runAgent(t *testing.T, a *agent.Agent) *runningAgent {
 }
 
 // startAgent runs an agent and waits until its tunnels are registered.
-func startAgent(t *testing.T, env *relayEnv, tunnels ...agent.TunnelConfig) *runningAgent {
+func startAgent(t testing.TB, env *relayEnv, tunnels ...agent.TunnelConfig) *runningAgent {
 	t.Helper()
 	return waitReady(t, runAgent(t, newAgent(t, env, testToken, tunnels...)))
 }
 
 // waitReady waits until a running agent has registered its tunnels.
-func waitReady(t *testing.T, ra *runningAgent) *runningAgent {
+func waitReady(t testing.TB, ra *runningAgent) *runningAgent {
 	t.Helper()
 	select {
 	case <-ra.agent.Ready():
@@ -275,7 +275,7 @@ func waitReady(t *testing.T, ra *runningAgent) *runningAgent {
 }
 
 // runAgentExpectError runs an agent that must fail, and returns its error.
-func runAgentExpectError(t *testing.T, env *relayEnv, token string, tunnels ...agent.TunnelConfig) error {
+func runAgentExpectError(t testing.TB, env *relayEnv, token string, tunnels ...agent.TunnelConfig) error {
 	t.Helper()
 	ra := runAgent(t, newAgent(t, env, token, tunnels...))
 	select {
@@ -291,7 +291,7 @@ func runAgentExpectError(t *testing.T, env *relayEnv, token string, tunnels ...a
 }
 
 // startEchoServer echoes every connection until EOF, then half-closes.
-func startEchoServer(t *testing.T) string {
+func startEchoServer(t testing.TB) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -315,7 +315,7 @@ func startEchoServer(t *testing.T) string {
 }
 
 // startBannerServer writes banner to every connection and closes it.
-func startBannerServer(t *testing.T, banner string) string {
+func startBannerServer(t testing.TB, banner string) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -348,7 +348,7 @@ func readBanner(addr string) (string, error) {
 }
 
 // stopAgent cancels a running agent and waits for Run to return.
-func stopAgent(t *testing.T, ra *runningAgent) {
+func stopAgent(t testing.TB, ra *runningAgent) {
 	t.Helper()
 	ra.cancel()
 	select {
@@ -360,7 +360,7 @@ func stopAgent(t *testing.T, ra *runningAgent) {
 }
 
 // unusedAddr returns a 127.0.0.1 address nothing is listening on.
-func unusedAddr(t *testing.T) string {
+func unusedAddr(t testing.TB) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

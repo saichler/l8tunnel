@@ -209,3 +209,34 @@ func TestRelayConfigFailsFast(t *testing.T) {
 		t.Errorf("ParsePortRange(22000-22999) = %d, %d, %v", lo, hi, err)
 	}
 }
+
+// C-8: the relay rejects an agent speaking another protocol version.
+func TestUnsupportedProtocolVersionRejected(t *testing.T) {
+	env := startRelay(t, 1)
+	conn, err := transport.DialRelay(t.Context(), env.addr, mustClientTLS(t, env), transport.DialOptions{Proxy: transport.ProxyNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux, err := transport.NewClientSession(conn, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mux.Close()
+	control, err := mux.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hello := &l8tunnel.ControlMessage{Body: &l8tunnel.ControlMessage_Hello{Hello: &l8tunnel.Hello{
+		ProtocolVersion: protocol.Version + 1, Token: testToken, AgentId: "future",
+	}}}
+	if err := protocol.WriteMessage(control, hello); err != nil {
+		t.Fatal(err)
+	}
+	reply := &l8tunnel.ControlMessage{}
+	if err := protocol.ReadMessage(control, reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.GetError().GetCode() != l8tunnel.ErrorCode_ERROR_CODE_UNSUPPORTED_VERSION {
+		t.Fatalf("reply %v, want UNSUPPORTED_VERSION", reply)
+	}
+}

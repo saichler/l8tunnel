@@ -277,6 +277,8 @@ Every requirement maps to exactly one phase. Platforms: **Server** = Linux; **Ag
 
 ### 10.3 Final verification (P5)
 
+Results: [P5-verification.md](P5-verification.md).
+
 Everything runs as end-to-end tests in `go/tests/`, against real relay and agent processes, using real clients (OpenSSH `ssh`, an HTTP client, a WebSocket client).
 
 1. **SSH:** connect through mode A (dedicated port) and mode B (`ProxyCommand l8tunnel connect`). Check an interactive session, `scp` of a large file, and port forwarding over the tunnel.

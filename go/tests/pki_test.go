@@ -20,7 +20,7 @@ type testPKI struct {
 	caFile, certFile, keyFile string
 }
 
-func newPKI(t *testing.T) *testPKI {
+func newPKI(t testing.TB) *testPKI {
 	t.Helper()
 	dir := t.TempDir()
 	caKey := mustKey(t)
@@ -73,7 +73,7 @@ func newPKI(t *testing.T) *testPKI {
 	return p
 }
 
-func mustKey(t *testing.T) *ecdsa.PrivateKey {
+func mustKey(t testing.TB) *ecdsa.PrivateKey {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -82,7 +82,7 @@ func mustKey(t *testing.T) *ecdsa.PrivateKey {
 	return key
 }
 
-func writePEM(t *testing.T, path, blockType string, der []byte) {
+func writePEM(t testing.TB, path, blockType string, der []byte) {
 	t.Helper()
 	data := pem.EncodeToMemory(&pem.Block{Type: blockType, Bytes: der})
 	if err := os.WriteFile(path, data, 0o600); err != nil {
