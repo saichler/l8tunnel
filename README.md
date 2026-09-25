@@ -185,6 +185,13 @@ service. `install-cert.sh` renews the certificate; `uninstall.sh [--purge]`
 removes it. The packaged `server.yaml` is preset for layer8-tunnel.info;
 `install.sh --domain example.com` uses another base domain.
 
+For the machines you want to reach, `./packaging/build-agent.sh amd64
+[domain]` builds `dist/l8tunnel-agent-<domain>-<version>-linux-amd64.tar.gz`.
+Its `install.sh` asks for the agent token, what to expose (SSH, a web app,
+or both) and a name, installs the agent as a systemd service, and prints
+how to connect. Unattended: `L8TUNNEL_TOKEN=... EXPOSE=both WEB_PORT=3000
+./install.sh`.
+
 ## Docker
 
 ```bash
