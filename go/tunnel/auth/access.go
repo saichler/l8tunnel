@@ -40,10 +40,10 @@ var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("l8tunnel"), bcrypt.Defaul
 func ParseAccess(p *l8tunnel.AccessPolicy) (*Access, error) {
 	a := &Access{users: map[string][]byte{}, verified: map[[sha256.Size]byte]time.Time{}}
 	var err error
-	if a.allow, err = parsePrefixes(p.GetAllowIps()); err != nil {
+	if a.allow, err = ParsePrefixes(p.GetAllowIps()); err != nil {
 		return nil, fmt.Errorf("allow_ips: %w", err)
 	}
-	if a.deny, err = parsePrefixes(p.GetDenyIps()); err != nil {
+	if a.deny, err = ParsePrefixes(p.GetDenyIps()); err != nil {
 		return nil, fmt.Errorf("deny_ips: %w", err)
 	}
 	for _, u := range p.GetBasicUsers() {
@@ -91,7 +91,8 @@ func ParsePrefix(s string) (netip.Prefix, error) {
 	return netip.PrefixFrom(addr, addr.BitLen()), nil
 }
 
-func parsePrefixes(list []string) ([]netip.Prefix, error) {
+// ParsePrefixes parses a list of addresses or CIDRs (see ParsePrefix).
+func ParsePrefixes(list []string) ([]netip.Prefix, error) {
 	out := make([]netip.Prefix, 0, len(list))
 	for _, s := range list {
 		p, err := ParsePrefix(s)

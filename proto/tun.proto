@@ -1,0 +1,493 @@
+// tun.proto is the management model of l8tunnel on Kubernetes: the
+// objects the Layer 8 management plane stores and serves (tokens,
+// reservations, gateway keys, agent certificates, edge domains, alert
+// rules) and the live records the data plane reports (relays, agents,
+// tunnels, edge nodes). The agent/relay wire protocol is l8tunnel.proto and
+// is unchanged by this file.
+
+syntax = "proto3";
+
+package tun;
+
+option go_package = "./types/tun";
+
+import "api.proto";
+import "l8notify.proto";
+
+// ============================================================================
+// Enums
+// ============================================================================
+
+enum TunTunnelType {
+  TUN_TUNNEL_TYPE_UNSPECIFIED = 0;
+  TUN_TUNNEL_TYPE_TCP = 1;
+  TUN_TUNNEL_TYPE_SSH = 2;
+  TUN_TUNNEL_TYPE_HTTP = 3;
+  TUN_TUNNEL_TYPE_TLS = 4;
+}
+
+enum TunIssueKind {
+  TUN_ISSUE_KIND_UNSPECIFIED = 0;
+  TUN_ISSUE_KIND_TOKEN = 1;       // create a token; the plaintext is returned once
+  TUN_ISSUE_KIND_AGENT_CERT = 2;  // issue an agent certificate; the key is returned once
+  TUN_ISSUE_KIND_IMPORT = 3;      // import a standalone relay's export
+  // REVOKE deletes a token with its certificates and reservations and tells
+  // every relay at once. (A plain ORM DELETE runs no callbacks, so relays
+  // would only notice it at their next re-read.)
+  TUN_ISSUE_KIND_REVOKE = 4;
+}
+
+enum EdgeDomainKind {
+  EDGE_DOMAIN_KIND_UNSPECIFIED = 0;
+  EDGE_DOMAIN_KIND_SITE = 1;         // a site hosted behind the router
+  EDGE_DOMAIN_KIND_TUNNEL_BASE = 2;  // <base> and *.<base>, served by the relays
+}
+
+enum EdgeCertStatus {
+  EDGE_CERT_STATUS_UNSPECIFIED = 0;
+  EDGE_CERT_STATUS_VALID = 1;
+  EDGE_CERT_STATUS_EXPIRING = 2;
+  EDGE_CERT_STATUS_EXPIRED = 3;
+  EDGE_CERT_STATUS_MISMATCH = 4;  // doesn't cover the domain, or the key doesn't match
+  EDGE_CERT_STATUS_MISSING = 5;
+}
+
+enum EdgeProtocol {
+  EDGE_PROTOCOL_UNSPECIFIED = 0;
+  EDGE_PROTOCOL_TLS = 1;   // routed by SNI; several domains may share the port
+  EDGE_PROTOCOL_HTTP = 2;  // routed by Host; several domains may share the port
+  EDGE_PROTOCOL_TCP = 3;   // no name to route by; the port belongs to one domain
+}
+
+enum EdgeForwardMode {
+  EDGE_FORWARD_MODE_UNSPECIFIED = 0;
+  EDGE_FORWARD_MODE_TERMINATE = 1;    // decrypt with the domain's certificate, reverse-proxy HTTP
+  EDGE_FORWARD_MODE_PASSTHROUGH = 2;  // forward the bytes untouched
+  EDGE_FORWARD_MODE_RELAY = 3;        // to the relays (TUNNEL_BASE only)
+}
+
+enum EdgeTargetKind {
+  EDGE_TARGET_KIND_UNSPECIFIED = 0;
+  EDGE_TARGET_KIND_TARGETS = 1;     // the explicit targets list
+  EDGE_TARGET_KIND_DNS = 2;         // every A record of target_dns
+  EDGE_TARGET_KIND_NODE_LOCAL = 3;  // the edge's own node IP
+  EDGE_TARGET_KIND_RELAYS = 4;      // the relay pool (TUNNEL_BASE only)
+}
+
+enum EdgeBackendScheme {
+  EDGE_BACKEND_SCHEME_UNSPECIFIED = 0;
+  EDGE_BACKEND_SCHEME_HTTPS = 1;
+  EDGE_BACKEND_SCHEME_HTTP = 2;
+}
+
+enum EdgeLbAlgorithm {
+  EDGE_LB_ALGORITHM_UNSPECIFIED = 0;
+  EDGE_LB_ALGORITHM_ROUND_ROBIN = 1;
+  EDGE_LB_ALGORITHM_LEAST_CONN = 2;
+  EDGE_LB_ALGORITHM_SOURCE_HASH = 3;
+  EDGE_LB_ALGORITHM_RANDOM = 4;
+}
+
+enum EdgeHealthType {
+  EDGE_HEALTH_TYPE_UNSPECIFIED = 0;
+  EDGE_HEALTH_TYPE_NONE = 1;
+  EDGE_HEALTH_TYPE_TCP = 2;
+  EDGE_HEALTH_TYPE_HTTP = 3;
+  EDGE_HEALTH_TYPE_HTTPS = 4;
+}
+
+enum TunRelayState {
+  TUN_RELAY_STATE_UNSPECIFIED = 0;
+  TUN_RELAY_STATE_READY = 1;
+  TUN_RELAY_STATE_DRAINING = 2;
+  TUN_RELAY_STATE_DOWN = 3;
+}
+
+enum TunLiveState {
+  TUN_LIVE_STATE_UNSPECIFIED = 0;
+  TUN_LIVE_STATE_ACTIVE = 1;
+  TUN_LIVE_STATE_GRACE = 2;  // the agent disconnected; the name is held for its token
+}
+
+enum TunAgentState {
+  TUN_AGENT_STATE_UNSPECIFIED = 0;
+  TUN_AGENT_STATE_ONLINE = 1;
+  TUN_AGENT_STATE_GRACE = 2;
+  TUN_AGENT_STATE_OFFLINE = 3;
+}
+
+enum TunAgentTransport {
+  TUN_AGENT_TRANSPORT_UNSPECIFIED = 0;
+  TUN_AGENT_TRANSPORT_TLS = 1;
+  TUN_AGENT_TRANSPORT_WEBSOCKET = 2;
+  TUN_AGENT_TRANSPORT_WEBSOCKET_PROXY = 3;  // WebSocket through an HTTP proxy
+}
+
+enum TunDisconnectReason {
+  TUN_DISCONNECT_REASON_UNSPECIFIED = 0;
+  TUN_DISCONNECT_REASON_HEARTBEAT_TIMEOUT = 1;
+  TUN_DISCONNECT_REASON_TOKEN_REVOKED = 2;
+  TUN_DISCONNECT_REASON_RELAY_DRAINED = 3;
+  TUN_DISCONNECT_REASON_RELAY_LOST = 4;
+  TUN_DISCONNECT_REASON_TAKEOVER = 5;
+  TUN_DISCONNECT_REASON_AGENT_CLOSED = 6;
+  TUN_DISCONNECT_REASON_OPERATOR = 7;
+}
+
+enum TunAlertCondition {
+  TUN_ALERT_CONDITION_UNSPECIFIED = 0;
+  TUN_ALERT_CONDITION_RELAY_LOST = 1;
+  TUN_ALERT_CONDITION_NO_READY_RELAY = 2;
+  TUN_ALERT_CONDITION_EDGE_POOL_DOWN = 3;
+  TUN_ALERT_CONDITION_CERT_EXPIRING = 4;
+  TUN_ALERT_CONDITION_EDGE_LISTENER_FAILED = 5;
+  TUN_ALERT_CONDITION_TOKEN_OFFLINE = 6;
+  TUN_ALERT_CONDITION_AGENT_OFFLINE = 7;
+}
+
+enum TunCtlCommandKind {
+  TUN_CTL_COMMAND_KIND_UNSPECIFIED = 0;
+  TUN_CTL_COMMAND_KIND_REANNOUNCE = 1;         // registry restarted: relays re-POST their state
+  TUN_CTL_COMMAND_KIND_DRAIN = 2;              // a relay starts draining
+  TUN_CTL_COMMAND_KIND_RESUME = 3;             // a draining relay takes agents again
+  TUN_CTL_COMMAND_KIND_DISCONNECT_AGENT = 4;   // close an agent's session
+  TUN_CTL_COMMAND_KIND_DISCONNECT_TUNNEL = 5;  // close one tunnel
+  TUN_CTL_COMMAND_KIND_TAKEN_OVER = 6;         // the agent reconnected elsewhere
+}
+
+// ============================================================================
+// Access (service area 40)
+// ============================================================================
+
+// TunTokenPolicy limits what a token may register (child of TunToken).
+message TunTokenPolicy {
+  repeated string names = 1;          // path.Match patterns; empty allows any name
+  repeated TunTunnelType types = 2;   // empty allows every type
+  int32 max_tunnels = 3;              // 0 = no cap
+  string ports = 4;                   // "min-max"; empty = the relay's range
+  bool require_cert = 5;
+  repeated string domains = 6;        // custom-domain patterns; empty allows none
+}
+
+// TunToken is an agent token. Only the bcrypt hash of its secret is stored;
+// the plaintext l8t_<token_id>_<secret> is returned once by TunIssue.
+message TunToken {
+  string token_id = 1;
+  string name = 2;
+  string description = 3;
+  string secret_hash = 4;
+  TunTokenPolicy policy = 5;
+  int64 created_at = 6;
+  string created_by = 7;
+}
+
+message TunTokenList {
+  repeated TunToken list = 1;
+  l8api.L8MetaData metadata = 2;
+}
+
+// TunReservation permanently binds a tunnel name (and optionally a tcp/ssh
+// public port) to a token.
+message TunReservation {
+  string reservation_id = 1;
+  string name = 2;
+  string token_id = 3;
+  int32 public_port = 4;
+  string note = 5;
+  int64 created_at = 6;
+}
+
+message TunReservationList {
+  repeated TunReservation list = 1;
+  l8api.L8MetaData metadata = 2;
+}
+
+// TunGatewayKey is an SSH public key allowed through the SSH jump gateway.
+message TunGatewayKey {
+  string key_id = 1;
+  string name = 2;
+  string public_key = 3;       // authorized_keys line
+  string fingerprint = 4;      // SHA256:...; set by the service
+  repeated string tunnels = 5; // tunnel name patterns the key may reach
+  int64 created_at = 6;
+}
+
+message TunGatewayKeyList {
+  repeated TunGatewayKey list = 1;
+  l8api.L8MetaData metadata = 2;
+}
+
+// TunAgentCert records an agent client certificate issued by the agent CA.
+// A certificate is accepted only while its record exists and isn't revoked.
+message TunAgentCert {
+  string cert_id = 1;  // the certificate serial
+  string token_id = 2;
+  string common_name = 3;
+  int64 not_before = 4;
+  int64 not_after = 5;
+  string fingerprint = 6;
+  bool revoked = 7;
+  int64 created_at = 8;
+}
+
+message TunAgentCertList {
+  repeated TunAgentCert list = 1;
+  l8api.L8MetaData metadata = 2;
+}
+
+// TunIssueRequest asks TunIssue for a new token, a new agent certificate or
+// an import. It is never stored.
+message TunIssueRequest {
+  TunIssueKind kind = 1;
+  // TOKEN
+  string token_name = 2;
+  string token_description = 3;
+  TunTokenPolicy policy = 4;
+  // AGENT_CERT and REVOKE
+  string token_id = 5;
+  int32 cert_days = 6;
+  // IMPORT: the JSON written by "l8tunnel-server export"
+  string import_json = 7;
+}
+
+// TunIssueResponse carries the secrets exactly once. It is never stored.
+message TunIssueResponse {
+  TunIssueKind kind = 1;
+  string token_id = 2;
+  string token = 3;       // TOKEN: the plaintext token
+  string cert_pem = 4;    // AGENT_CERT
+  string key_pem = 5;     // AGENT_CERT: the only copy of the key
+  string cert_id = 6;     // AGENT_CERT: the serial
+  int64 expires = 7;      // AGENT_CERT
+  int32 imported_tokens = 8;
+  int32 imported_reservations = 9;
+  int32 imported_gateway_keys = 10;
+  int32 revoked_certs = 11;         // REVOKE
+  int32 removed_reservations = 12;  // REVOKE
+}
+
+// ============================================================================
+// Edge (service area 41)
+// ============================================================================
+
+// EdgePortForward is one row of a domain's port forwarding table (child of
+// EdgeDomain).
+message EdgePortForward {
+  string forward_id = 1;
+  int32 listen_port = 2;
+  int32 listen_port_end = 3;  // set only for a range
+  EdgeProtocol protocol = 4;
+  EdgeForwardMode mode = 5;
+  EdgeTargetKind target_kind = 6;
+  // TARGETS: "host:port" or "host:port*weight"; a leading "!" disables one.
+  repeated string targets = 7;
+  string target_dns = 8;      // DNS
+  int32 target_port = 9;      // DNS and NODE_LOCAL
+  EdgeBackendScheme backend_scheme = 10;
+  bool skip_verify = 11;
+  bool proxy_protocol = 12;
+  EdgeLbAlgorithm lb = 13;
+  EdgeHealthType health_type = 14;
+  string health_path = 15;
+  int32 health_interval = 16;  // seconds; 0 = 10
+  bool enabled = 17;
+  string note = 18;
+}
+
+// EdgeDomain is one site behind the edge: its names, certificate and port
+// forwards.
+message EdgeDomain {
+  string domain_id = 1;
+  string domain = 2;
+  repeated string aliases = 3;
+  EdgeDomainKind kind = 4;
+  bool enabled = 5;
+  repeated string allow_ips = 6;
+  repeated string deny_ips = 7;
+  // Certificate chain and private key, uploaded through FileStore.
+  string cert_storage_path = 8;
+  string cert_file_name = 9;
+  int64 cert_file_size = 10;
+  string key_storage_path = 11;
+  string key_file_name = 12;
+  int64 key_file_size = 13;
+  // Certificate summary, written only by the service.
+  string cert_subject = 14;
+  repeated string cert_sans = 15;
+  string cert_issuer = 16;
+  int64 cert_not_after = 17;
+  string cert_fingerprint = 18;
+  EdgeCertStatus cert_status = 19;
+  repeated EdgePortForward port_forwards = 20;
+  int64 config_version = 21;
+  string note = 22;
+}
+
+message EdgeDomainList {
+  repeated EdgeDomain list = 1;
+  l8api.L8MetaData metadata = 2;
+}
+
+// EdgeListenerStatus is one listener as the edge sees it (child of EdgeNode).
+message EdgeListenerStatus {
+  int32 port = 1;
+  int32 port_end = 2;
+  EdgeProtocol protocol = 3;
+  bool bound = 4;
+  string error = 5;
+  repeated string domains = 6;
+}
+
+// EdgeBackendStatus is one pool member's health (child of EdgeNode).
+message EdgeBackendStatus {
+  string domain = 1;
+  int32 listen_port = 2;
+  string target = 3;
+  bool healthy = 4;
+  int64 active_conns = 5;
+  string last_error = 6;
+  int64 last_check = 7;
+}
+
+// EdgeNode is a running edge's report.
+message EdgeNode {
+  string edge_id = 1;
+  string node_ip = 2;
+  string version = 3;
+  int64 config_version = 4;  // the EdgeDomain version the edge has applied
+  repeated EdgeListenerStatus listeners = 5;
+  repeated EdgeBackendStatus backends = 6;
+  int64 active_conns = 7;
+  int64 total_conns = 8;
+  int64 bytes_in = 9;
+  int64 bytes_out = 10;
+  int64 started_at = 11;
+  int64 last_seen = 12;
+  bool simulated = 13;
+}
+
+message EdgeNodeList {
+  repeated EdgeNode list = 1;
+  l8api.L8MetaData metadata = 2;
+}
+
+// ============================================================================
+// Live (service area 42), owned by the registry
+// ============================================================================
+
+// TunRelay is a relay's heartbeat report.
+message TunRelay {
+  string relay_id = 1;  // the pod name
+  string pod_ip = 2;
+  int32 tls_port = 3;
+  int32 http_port = 4;
+  int32 stream_port = 5;
+  int32 gateway_port = 6;
+  int32 ops_port = 7;
+  TunRelayState state = 8;
+  int32 sessions = 9;
+  int32 tunnels = 10;
+  int64 bytes_in = 11;
+  int64 bytes_out = 12;
+  int64 cert_not_after = 13;
+  string version = 14;
+  int64 started_at = 15;
+  int64 last_seen = 16;
+  bool simulated = 17;
+}
+
+message TunRelayList {
+  repeated TunRelay list = 1;
+  l8api.L8MetaData metadata = 2;
+}
+
+// TunAgent is one agent (one per agent ID) and its current session.
+message TunAgent {
+  string agent_id = 1;
+  string token_id = 2;
+  string token_name = 3;
+  string cert_serial = 4;  // set when the agent authenticated with a certificate
+  string session_id = 5;
+  string version = 6;
+  string os = 7;
+  string arch = 8;
+  string public_ip = 9;
+  string relay_id = 10;
+  TunAgentTransport transport = 11;
+  TunAgentState state = 12;
+  int64 connected_at = 13;
+  int64 last_heartbeat = 14;
+  int64 rtt_us = 15;
+  int32 tunnel_count = 16;
+  int64 active_streams = 17;
+  int64 bytes_in = 18;
+  int64 bytes_out = 19;
+  int64 grace_until = 20;
+  int64 last_seen = 21;
+  TunDisconnectReason disconnect_reason = 22;
+  bool simulated = 23;
+}
+
+message TunAgentList {
+  repeated TunAgent list = 1;
+  l8api.L8MetaData metadata = 2;
+}
+
+// TunLiveTunnel is one registered tunnel, cluster-wide.
+message TunLiveTunnel {
+  string tunnel_id = 1;
+  string name = 2;
+  TunTunnelType type = 3;
+  string hostname = 4;
+  repeated string domains = 5;
+  int32 public_port = 6;
+  string relay_id = 7;
+  string agent_id = 8;
+  string token_id = 9;
+  TunLiveState state = 10;
+  int64 connected_at = 11;
+  int64 grace_until = 12;
+  int64 active_conns = 13;
+  int64 total_conns = 14;
+  int64 bytes_in = 15;
+  int64 bytes_out = 16;
+  bool simulated = 17;
+}
+
+message TunLiveTunnelList {
+  repeated TunLiveTunnel list = 1;
+  l8api.L8MetaData metadata = 2;
+}
+
+// TunCtlCommand is pushed to the relays' TunRlyCtl listener for actions
+// that aren't a stored object's change.
+message TunCtlCommand {
+  TunCtlCommandKind kind = 1;
+  string relay_id = 2;   // "" = every relay
+  string agent_id = 3;
+  string tunnel_id = 4;
+  string requested_by = 5;
+}
+
+// ============================================================================
+// Alerts (service area 43)
+// ============================================================================
+
+// TunAlertRule notifies its targets when a condition holds.
+message TunAlertRule {
+  string rule_id = 1;
+  string name = 2;
+  TunAlertCondition condition = 3;
+  int32 threshold = 4;  // minutes for *_OFFLINE, days for CERT_EXPIRING
+  string token_id = 5;  // TOKEN_OFFLINE
+  string agent_id = 6;  // AGENT_OFFLINE
+  repeated l8notify.NotifyTarget targets = 7;
+  int32 cooldown_minutes = 8;
+  bool enabled = 9;
+  int64 last_fired = 10;
+}
+
+message TunAlertRuleList {
+  repeated TunAlertRule list = 1;
+  l8api.L8MetaData metadata = 2;
+}

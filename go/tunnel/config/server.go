@@ -14,13 +14,13 @@ import (
 	"time"
 
 	"github.com/saichler/l8tunnel/go/tunnel/admin"
+	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/certs"
 	"github.com/saichler/l8tunnel/go/tunnel/httpproxy"
 	"github.com/saichler/l8tunnel/go/tunnel/oidc"
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 	"github.com/saichler/l8tunnel/go/tunnel/relay"
 	"github.com/saichler/l8tunnel/go/tunnel/store"
-	"github.com/saichler/l8tunnel/go/tunnel/transport"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -338,7 +338,7 @@ func (f *ServerFile) relayConfig(logger *slog.Logger) (relay.Config, error) {
 	if err != nil {
 		return relay.Config{}, fmt.Errorf("tcp_port_range: %w", err)
 	}
-	trusted, err := transport.ParsePrefixes(f.TrustedProxies)
+	trusted, err := auth.ParsePrefixes(f.TrustedProxies)
 	if err != nil {
 		return relay.Config{}, fmt.Errorf("trusted_proxies: %w", err)
 	}

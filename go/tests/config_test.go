@@ -424,3 +424,40 @@ rate_limits: {connections_per_second: 5, connections_burst: 10, auth_failures_pe
 		t.Fatal("the removed tokens_file option was accepted silently")
 	}
 }
+
+func TestClusterYAMLConfig(t *testing.T) {
+	f, err := config.LoadClusterFile(writeFile(t, "cluster.yaml", `
+base_domain: Layer8-Tunnel.info.
+reserved_names: [www, admin]
+public: {gateway: 2222}
+agent_ca: {cert: /etc/l8tunnel/agent-ca/ca.crt, key: /etc/l8tunnel/agent-ca/ca.key}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.BaseDomain != "layer8-tunnel.info" || f.ControlSNI != "connect.layer8-tunnel.info" || f.TCPPortRange != "22000-22999" ||
+		f.Public.HTTPS != 443 || f.Public.HTTP != 80 || f.Relay.TLS != 8443 || f.Relay.Stream != 8444 {
+		t.Fatalf("defaults not applied: %+v", f)
+	}
+	r := f.Rules()
+	if r.PortMin != 22000 || r.PortMax != 22999 || !r.IsReserved("admin") || !r.IsReserved("connect") || r.IsReserved("x1") {
+		t.Fatalf("rules %+v", r)
+	}
+	t.Setenv(config.ClusterEnv, writeFile(t, "cluster.yaml", "base_domain: env.test\npublic: {http: -1}\n"))
+	f, err = config.LoadClusterFile("")
+	if err != nil || f.BaseDomain != "env.test" || f.Public.HTTP != -1 {
+		t.Fatalf("config from $%s: %+v %v", config.ClusterEnv, f, err)
+	}
+	for name, content := range map[string]string{
+		"no base domain":  "reserved_names: [www]\n",
+		"bad reserved":    "base_domain: a.test\nreserved_names: [WWW]\n",
+		"bad range":       "base_domain: a.test\ntcp_port_range: 9-1\n",
+		"bad relay port":  "base_domain: a.test\nrelay: {tls: 70000}\n",
+		"unknown key":     "base_domain: a.test\nrelays: 3\n",
+		"bad public http": "base_domain: a.test\npublic: {http: -5}\n",
+	} {
+		if _, err := config.LoadClusterFile(writeFile(t, "cluster.yaml", content)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

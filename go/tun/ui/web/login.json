@@ -1,0 +1,14 @@
+{
+  "login": {
+    "appTitle": "l8tunnel",
+    "authEndpoint": "/auth",
+    "redirectUrl": "/app.html",
+    "sessionTimeout": 30,
+    "tfaEnabled": true
+  },
+  "app": {
+    "dateFormat": "mm/dd/yyyy",
+    "apiPrefix": "/tun",
+    "healthPath": "/0/Health"
+  }
+}

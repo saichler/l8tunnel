@@ -31,3 +31,4 @@ go.work.sum
 # .idea/
 # .vscode/
 dist/
+k8s/kind-cluster.yaml

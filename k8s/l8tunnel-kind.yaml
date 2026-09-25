@@ -1,0 +1,205 @@
+# KIND mode (K8sRules): like bare-metal, but with KIND's own "standard"
+# storage class. Every per-node workload is a StatefulSet with
+# podAntiAffinity (one pod per node) and volumeClaimTemplates; replicas 1
+# matches kind-start.sh's single-node cluster. In KIND every l8tunnel
+# process uses hostNetwork: kindnet doesn't carry the vnet's discovery
+# between the pod network and the host network (the same fix l8alarms and
+# secscan use).
+#
+# Phase K1 deploys the vnet, the backend and the web server; the registry,
+# relays, edge and log services join in later phases.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: l8tunnel
+  labels:
+    name: l8tunnel
+
+---
+
+# cluster.yaml, shared by every l8tunnel process (plan §2, §16).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: l8tunnel
+  name: l8tunnel-cluster
+  labels:
+    app: l8tunnel
+data:
+  cluster.yaml: |
+    base_domain: tunnel.kind.test
+    reserved_names: [www, admin]
+    public:
+      gateway: 2222
+    agent_ca:
+      cert: /etc/l8tunnel/agent-ca/ca.crt
+      key: /etc/l8tunnel/agent-ca/ca.key
+
+---
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: l8tunnel
+  name: l8tunnel-vnet
+  labels:
+    app: l8tunnel-vnet
+spec:
+  serviceName: l8tunnel-vnet
+  replicas: 1
+  selector:
+    matchLabels:
+      app: l8tunnel-vnet
+  template:
+    metadata:
+      labels:
+        app: l8tunnel-vnet
+    spec:
+      hostNetwork: true
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: l8tunnel-vnet
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: l8tunnel-vnet
+          image: saichler/l8tunnel-vnet:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 29000
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          volumeMounts:
+            - name: hdata
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: hdata
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 1Gi
+
+---
+
+# The management backend: ORM services on its embedded Postgres.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: l8tunnel
+  name: l8tunnel
+  labels:
+    app: l8tunnel
+spec:
+  serviceName: l8tunnel
+  replicas: 1
+  selector:
+    matchLabels:
+      app: l8tunnel
+  template:
+    metadata:
+      labels:
+        app: l8tunnel
+    spec:
+      hostNetwork: true
+      containers:
+        - name: l8tunnel
+          image: saichler/l8tunnel:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: L8TUNNEL_CLUSTER_CONFIG
+              value: /etc/l8tunnel/cluster/cluster.yaml
+            # KIND only: mock data may post simulated live records.
+            - name: L8TUNNEL_ALLOW_SIMULATED
+              value: "true"
+          volumeMounts:
+            - name: hdata
+              mountPath: /data
+            - name: cluster
+              mountPath: /etc/l8tunnel/cluster
+              readOnly: true
+            - name: agent-ca
+              mountPath: /etc/l8tunnel/agent-ca
+              readOnly: true
+      volumes:
+        - name: cluster
+          configMap:
+            name: l8tunnel-cluster
+        - name: agent-ca
+          secret:
+            secretName: l8tunnel-agent-ca
+            defaultMode: 0400
+  volumeClaimTemplates:
+    - metadata:
+        name: hdata
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 5Gi
+
+---
+
+# The web server: REST API, UI, and FileStore (exactly one instance).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: l8tunnel
+  name: l8tunnel-web
+  labels:
+    app: l8tunnel-web
+spec:
+  serviceName: l8tunnel-web
+  replicas: 1
+  selector:
+    matchLabels:
+      app: l8tunnel-web
+  template:
+    metadata:
+      labels:
+        app: l8tunnel-web
+    spec:
+      hostNetwork: true
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: l8tunnel-web
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: l8tunnel-web
+          image: saichler/l8tunnel-web:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5443
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          volumeMounts:
+            - name: hdata
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: hdata
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 1Gi

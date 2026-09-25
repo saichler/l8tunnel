@@ -33,6 +33,15 @@ type TokenRecord struct {
 
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
+// ValidateTokenName checks a token name: 1-64 letters, digits, '.', '_'
+// or '-', starting with a letter or digit.
+func ValidateTokenName(name string) error {
+	if !namePattern.MatchString(name) {
+		return fmt.Errorf("token name %q must be 1-64 letters, digits, '.', '_' or '-'", name)
+	}
+	return nil
+}
+
 // NewToken creates a token and the record to store for it. The plaintext
 // is shown to the operator once and never stored.
 func NewToken(name string, policy Policy) (string, *TokenRecord, error) {
@@ -51,8 +60,8 @@ func NewToken(name string, policy Policy) (string, *TokenRecord, error) {
 // NewTokenRecord builds the record for an existing plaintext token, hashing
 // its secret with the given bcrypt cost.
 func NewTokenRecord(name, token string, policy Policy, cost int) (*TokenRecord, error) {
-	if !namePattern.MatchString(name) {
-		return nil, fmt.Errorf("token name %q must be 1-64 letters, digits, '.', '_' or '-'", name)
+	if err := ValidateTokenName(name); err != nil {
+		return nil, err
 	}
 	if err := policy.Validate(); err != nil {
 		return nil, err

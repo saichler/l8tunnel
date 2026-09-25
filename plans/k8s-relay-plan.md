@@ -1482,3 +1482,41 @@ Docker or kubectl. It only runs the systemd relay and sshd.
 - install Kubernetes on k8s-node-2 (and any other nodes)
 - point the router at an existing cluster's node
 - run the cluster elsewhere
+
+### 16.9 K1 findings and decisions (2026-09-25)
+
+- **ORM deletes run no callbacks.** l8orm's `OrmService.Delete` never calls
+  the service callback, so a plain DELETE can't be refused or pushed to the
+  relays.
+  - Tokens are therefore revoked through `TunIssue` with the new kind
+    `REVOKE`. It deletes the token, its certificates and its reservations,
+    and pushes the revocation to the relays at once. The UI's delete action
+    for tokens uses it.
+  - Other deletes reach relays and edges at their 60 s re-read.
+  - The backend re-creates the `TUNNEL_BASE` domain every minute if it's
+    deleted.
+- **Simpler children.** `TunTokenPolicy.ports` stays a `"min-max"` string
+  and `TunGatewayKey.tunnels` a list of patterns, exactly as the standalone
+  relay stores them. The planned `TunPortRange` and `TunGatewayGrant`
+  children would add nothing.
+- **Tests run against KIND only** (your decision).
+  - The management-plane tests (`go/tests/kind_*_test.go`) call the REST
+    API of a real deployment in KIND and skip unless `L8TUNNEL_KIND_URL`
+    is set.
+  - The relay and agent suite keeps running in process, as before.
+- **Images follow the ecosystem pattern exactly** (your decision). Each
+  Dockerfile copies only its `main.go` and builds the code fetched from
+  GitHub, and each `build.sh` pushes to Docker Hub. So every KIND test
+  round is: push the code, build the images, `kind-start.sh`, test.
+- **Pulled forward from K6** because K1 needs them for its tests:
+  - the vnet, backend and web images
+  - `k8s/l8tunnel-kind.yaml` with those three
+  - `kind-start.sh`/`kind-stop.sh`, `deploy.sh`/`undeploy.sh`, and
+    `secrets.sh` (the agent CA Secret)
+  - the web server's `main.go` with a placeholder page (the UI itself
+    stays in K5)
+- **Base images.** `saichler/l8tunnel-security` and
+  `saichler/l8tunnel-postgres` are built with
+  `../l8secure/build-images.sh l8tunnel amd64` from the security config
+  `l8secure/go/secure/plugin/l8tunnel/l8tunnel.json`. That file is new in
+  the l8secure repository and not committed there.

@@ -2,10 +2,8 @@ package transport
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"net/netip"
-	"strings"
 	"time"
 
 	proxyproto "github.com/pires/go-proxyproto"
@@ -81,27 +79,4 @@ func IsTrusted(addr net.Addr, trusted []netip.Prefix) bool {
 		}
 	}
 	return false
-}
-
-// ParsePrefixes parses CIDRs or single addresses ("10.0.0.0/8",
-// "192.168.1.120"), for configuration.
-func ParsePrefixes(values []string) ([]netip.Prefix, error) {
-	out := make([]netip.Prefix, 0, len(values))
-	for _, v := range values {
-		v = strings.TrimSpace(v)
-		if !strings.Contains(v, "/") {
-			ip, err := netip.ParseAddr(v)
-			if err != nil {
-				return nil, fmt.Errorf("%q is not an IP address or CIDR", v)
-			}
-			out = append(out, netip.PrefixFrom(ip.Unmap(), ip.Unmap().BitLen()))
-			continue
-		}
-		p, err := netip.ParsePrefix(v)
-		if err != nil {
-			return nil, fmt.Errorf("%q is not an IP address or CIDR", v)
-		}
-		out = append(out, p.Masked())
-	}
-	return out, nil
 }
