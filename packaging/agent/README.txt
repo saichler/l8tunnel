@@ -1,6 +1,11 @@
 l8tunnel agent
 ==============
 
+There are two agent packages; use the one that matches where this machine is:
+  l8tunnel-agent-<domain>-...             machines anywhere on the internet
+  l8tunnel-agent-<domain>-via-<ip>-...    machines on the relay's own network
+                                          (connects straight to the relay's LAN IP)
+
 Install (on the machine you want to reach)
   tar xzf l8tunnel-agent-*.tar.gz
   cd l8tunnel-agent-*/

@@ -187,7 +187,10 @@ removes it. The packaged `server.yaml` is preset for layer8-tunnel.info;
 
 For the machines you want to reach, `./packaging/build-agent.sh amd64
 [domain]` builds `dist/l8tunnel-agent-<domain>-<version>-linux-amd64.tar.gz`.
-Its `install.sh` asks for the agent token, what to expose (SSH, a web app,
+Add a third argument, the relay's LAN address (`build-agent.sh amd64
+layer8-tunnel.info 192.168.1.120`), for agents on the relay's own network:
+they connect straight to it (still verifying its certificate) instead of
+through the router's loopback. Its `install.sh` asks for the agent token, what to expose (SSH, a web app,
 or both) and a name, installs the agent as a systemd service, and prints
 how to connect. Unattended: `L8TUNNEL_TOKEN=... EXPOSE=both WEB_PORT=3000
 ./install.sh`.

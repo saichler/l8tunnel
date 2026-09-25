@@ -20,6 +20,7 @@ esac
 
 DOMAIN="$(cat DOMAIN)"
 RELAY="connect.$DOMAIN:443"
+[ -s RELAY ] && RELAY="$(cat RELAY)"   # e.g. the relay's LAN address
 CONF=/etc/l8tunnel/agent.yaml ENVF=/etc/l8tunnel/agent.env
 interactive=0; [ -t 0 ] && interactive=1
 
@@ -81,6 +82,10 @@ else
   {
     echo "# /etc/l8tunnel/agent.yaml, written by install.sh"
     echo "relay: $RELAY"
+    case "$RELAY" in
+      "connect.$DOMAIN:"*) ;;
+      *) echo "server_name: connect.$DOMAIN    # the relay's certificate is checked for this name" ;;
+    esac
     echo "# the token is in $ENVF (root only)"
     echo "token: \${L8TUNNEL_TOKEN}"
     echo "status_socket: /run/l8tunnel-agent/status.sock"
