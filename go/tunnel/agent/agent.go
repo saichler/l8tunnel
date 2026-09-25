@@ -21,8 +21,8 @@ type Agent struct {
 
 	mu        sync.Mutex
 	endpoints []*l8tunnel.Endpoint
-	targets   map[string]string // tunnel ID -> local target
-	names     []string          // name per configured tunnel, once assigned
+	targets   map[string]TunnelConfig // tunnel ID -> tunnel
+	names     []string                // name per configured tunnel, once assigned
 	ready     chan struct{}
 	readyOnce sync.Once
 }
@@ -35,14 +35,19 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.AgentID == "" {
 		cfg.AgentID = protocol.RandomID(8)
 	}
+	log := cfg.Logger.With("agent", cfg.AgentID)
 	names := make([]string, len(cfg.Tunnels))
 	for i, t := range cfg.Tunnels {
 		names[i] = t.Name
+		if t.InsecureSkipVerify {
+			log.Warn("TLS certificate verification is disabled for this tunnel's target",
+				"tunnel", t.Name, "target", t.targetString())
+		}
 	}
 	return &Agent{
 		cfg:     cfg,
-		log:     cfg.Logger.With("agent", cfg.AgentID),
-		targets: map[string]string{},
+		log:     log,
+		targets: map[string]TunnelConfig{},
 		names:   names,
 		ready:   make(chan struct{}),
 	}, nil
@@ -119,11 +124,11 @@ func (a *Agent) setEndpoints(endpoints []*l8tunnel.Endpoint) error {
 	}
 	a.mu.Lock()
 	a.endpoints = endpoints
-	a.targets = map[string]string{}
+	a.targets = map[string]TunnelConfig{}
 	for i, ep := range endpoints {
-		a.targets[ep.GetTunnelId()] = a.cfg.Tunnels[i].Target
+		a.targets[ep.GetTunnelId()] = a.cfg.Tunnels[i]
 		a.names[i] = ep.GetName()
-		a.logEndpoint(ep, a.cfg.Tunnels[i].Target)
+		a.logEndpoint(ep, a.cfg.Tunnels[i].targetString())
 	}
 	a.mu.Unlock()
 	a.readyOnce.Do(func() { close(a.ready) })
@@ -146,8 +151,9 @@ func (a *Agent) requestedName(i int) string {
 	return a.names[i]
 }
 
-func (a *Agent) targetFor(tunnelID string) string {
+func (a *Agent) tunnelFor(tunnelID string) (TunnelConfig, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.targets[tunnelID]
+	t, ok := a.targets[tunnelID]
+	return t, ok
 }

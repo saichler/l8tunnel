@@ -29,8 +29,23 @@ type TunnelConfig struct {
 	Type l8tunnel.TunnelType
 	// Target is the local host:port the agent dials for each connection.
 	Target string
-	// PublicPort requests a fixed relay port; 0 lets the relay allocate one.
+	// TargetTLS makes the agent speak TLS to Target (HTTP tunnels whose
+	// local service is HTTPS).
+	TargetTLS bool
+	// InsecureSkipVerify skips verifying Target's certificate, for local
+	// services with self-signed certificates. Requires TargetTLS.
+	InsecureSkipVerify bool
+	// PublicPort requests a fixed relay port (TCP/SSH only); 0 lets the
+	// relay allocate one.
 	PublicPort uint32
+}
+
+// targetString is the target as shown in logs.
+func (t TunnelConfig) targetString() string {
+	if t.TargetTLS {
+		return "https://" + t.Target
+	}
+	return t.Target
 }
 
 // Config configures an Agent.
@@ -71,13 +86,22 @@ func (c *Config) validate() error {
 	for i := range c.Tunnels {
 		t := &c.Tunnels[i]
 		switch t.Type {
-		case l8tunnel.TunnelType_TUNNEL_TYPE_TCP:
+		case l8tunnel.TunnelType_TUNNEL_TYPE_TCP, l8tunnel.TunnelType_TUNNEL_TYPE_HTTP, l8tunnel.TunnelType_TUNNEL_TYPE_TLS:
 		case l8tunnel.TunnelType_TUNNEL_TYPE_SSH:
 			if t.Target == "" {
 				t.Target = DefaultSSHTarget
 			}
 		default:
-			return fmt.Errorf("agent: tunnel %q: type %s is not supported yet", t.Name, t.Type)
+			return fmt.Errorf("agent: tunnel %q: invalid type %s", t.Name, t.Type)
+		}
+		if t.TargetTLS && t.Type != l8tunnel.TunnelType_TUNNEL_TYPE_HTTP {
+			return fmt.Errorf("agent: tunnel %q: an https target applies only to http tunnels", t.Name)
+		}
+		if t.InsecureSkipVerify && !t.TargetTLS {
+			return fmt.Errorf("agent: tunnel %q: insecure_skip_verify requires an https target", t.Name)
+		}
+		if t.PublicPort != 0 && t.Type != l8tunnel.TunnelType_TUNNEL_TYPE_TCP && t.Type != l8tunnel.TunnelType_TUNNEL_TYPE_SSH {
+			return fmt.Errorf("agent: tunnel %q: public_port applies only to tcp and ssh tunnels", t.Name)
 		}
 		if _, _, err := net.SplitHostPort(t.Target); err != nil {
 			return fmt.Errorf("agent: tunnel %q: target %q must be host:port", t.Name, t.Target)

@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -10,7 +11,6 @@ import (
 	"syscall"
 
 	"github.com/saichler/l8tunnel/go/tunnel/config"
-	"github.com/saichler/l8tunnel/go/tunnel/relay"
 )
 
 func main() {
@@ -25,24 +25,21 @@ func main() {
 }
 
 func run(logger *slog.Logger, configPath string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	file, err := config.LoadServerFile(configPath)
 	if err != nil {
 		return err
 	}
-	cfg, err := file.RelayConfig(logger)
-	if err != nil {
-		return err
-	}
-	srv, err := relay.New(cfg)
+	srv, err := file.NewRelay(ctx, logger)
 	if err != nil {
 		return err
 	}
 	if err := srv.Start(); err != nil {
 		return err
 	}
-
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	logger.Info("shutting down", "signal", (<-sig).String())
+	<-ctx.Done()
+	logger.Info("shutting down")
 	return srv.Close()
 }

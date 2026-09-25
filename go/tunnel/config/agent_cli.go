@@ -4,14 +4,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
-	"strconv"
 	"strings"
 )
 
 // AgentUsage describes the agent's command line.
 const AgentUsage = `usage:
   l8tunnel-agent --config <agent.yaml>
+  l8tunnel-agent [global flags] http <port|host:port|http(s)://host:port> [--name N] [--insecure-skip-verify]
+  l8tunnel-agent [global flags] tls <port|host:port> [--name N]
   l8tunnel-agent [global flags] tcp <port|host:port> [--name N] [--port P]
   l8tunnel-agent [global flags] ssh [port|host:port] [--name N] [--port P]
 
@@ -22,10 +22,14 @@ global flags:
   --token token       agent token (default: $L8TUNNEL_TOKEN)
 
 tunnel flags:
-  --name N            tunnel name (default: assigned by the relay)
-  --port P            fixed public port on the relay (default: allocated)
+  --name N                 tunnel name (default: assigned by the relay)
+  --port P                 fixed public port on the relay, tcp/ssh only (default: allocated)
+  --insecure-skip-verify   don't verify an https target's certificate (self-signed local services)
 
 A bare port as the target means 127.0.0.1:<port>. ssh defaults to 127.0.0.1:22.
+http tunnels are served at https://<name>.<base-domain>; an https:// target makes
+the agent speak TLS to the local service. tls tunnels pass the client's TLS
+through untouched to a service that holds its own certificate.
 `
 
 // ParseAgentArgs parses the agent's command line (without the program
@@ -73,9 +77,12 @@ func ParseAgentArgs(args []string, stderr io.Writer) (*AgentFile, error) {
 func parseTunnelArgs(typ string, args []string, stderr io.Writer) (TunnelFile, error) {
 	t := TunnelFile{Type: typ}
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		target, err := normalizeTarget(args[0])
+		target, _, err := parseTarget(args[0])
 		if err != nil {
 			return t, err
+		}
+		if strings.Contains(args[0], "://") {
+			target = args[0] // keep the scheme; AgentConfig applies it
 		}
 		t.Target = target
 		args = args[1:]
@@ -84,6 +91,7 @@ func parseTunnelArgs(typ string, args []string, stderr io.Writer) (TunnelFile, e
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, AgentUsage) }
 	fs.StringVar(&t.Name, "name", "", "")
+	fs.BoolVar(&t.InsecureSkipVerify, "insecure-skip-verify", false, "")
 	port := fs.Uint("port", 0, "")
 	if err := fs.Parse(args); err != nil {
 		return t, err
@@ -96,18 +104,4 @@ func parseTunnelArgs(typ string, args []string, stderr io.Writer) (TunnelFile, e
 	}
 	t.PublicPort = uint32(*port)
 	return t, nil
-}
-
-// normalizeTarget turns a bare port into 127.0.0.1:<port>.
-func normalizeTarget(s string) (string, error) {
-	if p, err := strconv.Atoi(s); err == nil {
-		if p < 1 || p > 65535 {
-			return "", fmt.Errorf("target port %d is not a valid port", p)
-		}
-		return net.JoinHostPort("127.0.0.1", s), nil
-	}
-	if _, _, err := net.SplitHostPort(s); err != nil {
-		return "", fmt.Errorf("target %q must be a port or host:port", s)
-	}
-	return s, nil
 }

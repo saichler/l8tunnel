@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -26,11 +27,24 @@ const (
 
 // Config configures a relay Server.
 type Config struct {
-	// ControlAddr is the TLS listener for agents and SNI-routed (mode B)
+	// ControlAddr is the shared TLS listener for agents and all SNI-routed
 	// tunnel traffic, for example ":443".
 	ControlAddr string
+	// HTTPAddr is an optional plain HTTP listener, for example ":80", that
+	// redirects to HTTPS and serves ACME HTTP-01 challenges; empty disables
+	// it.
+	HTTPAddr string
+	// HTTPChallenge wraps the HTTP listener's redirect handler so ACME
+	// HTTP-01 challenges are answered; nil means no ACME challenges.
+	HTTPChallenge func(next http.Handler) http.Handler
+	// PublicHTTPSPort is the port clients use to reach ControlAddr, used in
+	// public URLs and redirects; zero means ControlAddr's port.
+	PublicHTTPSPort int
+	// DisableForwardedHeaders stops the relay adding X-Forwarded-For,
+	// -Host and -Proto to HTTP tunnel requests.
+	DisableForwardedHeaders bool
 	// TLS is the relay's server TLS config (see transport.ServerTLSConfig).
-	// Its certificate must cover ControlSNI and *.BaseDomain.
+	// Its certificates must cover ControlSNI and *.BaseDomain.
 	TLS *tls.Config
 	// BaseDomain is the parent domain of tunnel host names: tunnel "db" is
 	// reachable by SNI as db.<BaseDomain>.
@@ -63,8 +77,14 @@ func (c *Config) validate() error {
 	if c.ControlAddr == "" {
 		return fmt.Errorf("relay: ControlAddr is required")
 	}
-	if c.TLS == nil || len(c.TLS.Certificates) == 0 {
+	if c.TLS == nil || (len(c.TLS.Certificates) == 0 && c.TLS.GetCertificate == nil) {
 		return fmt.Errorf("relay: a TLS config with a certificate is required")
+	}
+	if c.PublicHTTPSPort < 0 || c.PublicHTTPSPort > 65535 {
+		return fmt.Errorf("relay: invalid PublicHTTPSPort %d", c.PublicHTTPSPort)
+	}
+	if c.HTTPChallenge == nil {
+		c.HTTPChallenge = func(next http.Handler) http.Handler { return next }
 	}
 	if c.Tokens == nil {
 		return fmt.Errorf("relay: Tokens are required")

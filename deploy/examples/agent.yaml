@@ -14,3 +14,13 @@ tunnels:
   - name: nas
     type: tcp
     target: 192.168.1.20:22   # any host the agent can reach
+  - name: grafana
+    type: http                # https://grafana.tunnel.example.com, TLS terminated at the relay
+    target: 3000              # a bare port means 127.0.0.1:3000
+  - name: homeassistant
+    type: http
+    target: https://192.168.1.30:8123   # the agent speaks TLS to the service
+    insecure_skip_verify: true          # the service has a self-signed certificate
+  - name: vault
+    type: tls                 # passthrough: the relay never decrypts; the service holds
+    target: 127.0.0.1:8200    # a certificate for vault.tunnel.example.com

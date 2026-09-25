@@ -105,14 +105,14 @@ Nothing has to open on the private network. The agent only makes outbound connec
 | ID | Requirement |
 |---|---|
 | H-1 | Each HTTP tunnel gets a hostname `<name>.<base-domain>`. Names are user-chosen (if allowed and free) or randomly generated. |
-| H-2 | **Termination mode (default):** the relay terminates TLS with its wildcard certificate, routes by `Host` header, and forwards HTTP to the agent. The agent forwards to the local target over HTTP or HTTPS (with optional `--insecure-skip-verify` for self-signed local services). This enables auth, header injection, logging and request inspection. |
-| H-3 | **Passthrough mode:** the relay routes by SNI without decrypting and forwards the raw TLS stream. The private service holds its own certificate, so encryption is end-to-end. The relay adds no L7 features in this mode. |
+| H-2 | **Termination mode (default):** the relay terminates TLS with its wildcard certificate (h2 and http/1.1, TLS 1.2+), routes by `Host` header, and forwards HTTP/1.1 to the agent over a stream. The `Host` must name the same tunnel as the TLS SNI, or the relay answers 421 Misdirected Request. The agent forwards to the local target over HTTP, or over HTTPS for an `https://` target (it speaks the TLS itself), with optional `insecure_skip_verify` for self-signed local services, which logs a warning at startup. This enables auth, header injection, logging and request inspection. |
+| H-3 | **Passthrough mode** (tunnel type `tls`): the relay reads the ClientHello without consuming it, routes by SNI, and forwards the raw TLS bytes. The private service holds its own certificate, so encryption is end-to-end. The relay adds no L7 features in this mode. |
 | H-4 | WebSockets, HTTP/2 (to the client), server-sent events, long polling and large uploads/downloads (streaming, no full buffering) are supported. |
-| H-5 | The relay adds `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` headers (configurable). |
+| H-5 | The relay adds `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` headers (`forwarded_headers`, default on). Incoming `X-Forwarded-*` headers from clients are always dropped, so they can't be spoofed. |
 | H-6 | **Custom domains:** a user can map `app.mydomain.com` (a CNAME to the relay) to a tunnel. The relay gets a certificate for it through HTTP-01 or TLS-ALPN-01. |
 | H-7 | **Access control per tunnel** (termination mode): none, HTTP basic auth, OIDC/OAuth2 (Google/GitHub/generic), IP allowlist/denylist. |
-| H-8 | Port 80 redirects to HTTPS, except ACME challenge paths. |
-| H-9 | A friendly error page when a tunnel exists but the agent is offline (502) or the name is unknown (404). |
+| H-8 | Port 80 (`listen.http`, `off` disables it) redirects to HTTPS with 308, except ACME HTTP-01 challenge paths. |
+| H-9 | A friendly HTML error page (plus an `X-L8tunnel-Error` header) when a tunnel exists but the agent is offline (502 `agent-offline`), the service behind the agent doesn't answer (502 `upstream-error`), or the name is unknown (404 `tunnel-not-found`). Clients other than `l8tunnel connect` get the page for any `<name>.<base-domain>`. In `acme.mode: http01` an unreserved name has no certificate, so the handshake fails instead. |
 
 ### 7.3 SSH tunnels
 
@@ -127,7 +127,7 @@ SSH carries no hostname (no SNI or Host header), so routing needs a different ap
 | ID | Requirement |
 |---|---|
 | S-1 | **Mode A:** the relay allocates a TCP port from a configured range (for example 22000–22999) or a requested fixed port. The mapping stays stable per tunnel name and token. |
-| S-2 | **Mode B:** the relay accepts TLS on :443 with SNI `<name>.<base-domain>`. For tunnels of type `tcp`/`ssh`, it terminates the outer TLS and forwards the plain inner byte stream (the SSH protocol) to the agent. A handshake for an unknown name, a tunnel with no connected agent, or the control SNI without the l8tunnel ALPN fails, so clients get an error instead of an empty connection. The name `connect` (the control SNI's label) can't be used as a tunnel name. |
+| S-2 | **Mode B:** the relay accepts TLS on :443 with SNI `<name>.<base-domain>`. For tunnels of type `tcp`/`ssh`, it terminates the outer TLS and forwards the plain inner byte stream (the SSH protocol) to the agent. `l8tunnel connect` offers the ALPN `l8tunnel-connect/1`; for a name with no active tunnel, or the control SNI without the l8tunnel ALPN, its handshake fails, so it gets an error instead of an empty connection or an HTML page. The name `connect` (the control SNI's label) can't be used as a tunnel name. |
 | S-3 | `l8tunnel connect <host>` opens TLS to the relay with the given SNI and pipes stdin/stdout, so it works as an OpenSSH `ProxyCommand`. |
 | S-4 | The relay never sees SSH credentials or plaintext, because SSH encrypts end to end. The relay only carries bytes. |
 | S-5 | Optional IP allowlist per SSH tunnel. Optional "tunnel access token" required by `l8tunnel connect` in mode B, as a second factor at the relay layer. |
@@ -189,7 +189,7 @@ admin:
 
 | ID | Requirement |
 |---|---|
-| V-1 | Wildcard certificate `*.base_domain` through ACME DNS-01 (pluggable providers, for example through lego/certmagic). Per-host HTTP-01/TLS-ALPN-01 for custom domains. Certificates are stored and renewed automatically. The ACME mode is set explicitly (`acme.mode: dns01 \| http01`). If the configured mode can't work (for example missing DNS credentials), the server refuses to start and names the missing setting. |
+| V-1 | Certificates come from exactly one of `tls` (static files) or `acme`. `acme.mode: dns01` gets a wildcard `*.base_domain` through a DNS provider API (pluggable through libdns; `cloudflare` first). `acme.mode: http01` gets the control host's certificate at startup and each tunnel host's on its first connection, but only for reserved tunnel names, so strangers can't make the relay order certificates for arbitrary names. Certificates needed at startup are obtained synchronously. Every misconfiguration (missing email, unknown provider, missing or misspelled credential, http01 without a fixed `listen.http` port, unreadable `ca_root`) stops the server before any network access and names the setting. Certificates are stored (`acme.storage`) and renewed automatically. `acme.ca` and `acme.ca_root` allow a private ACME CA. |
 | V-2 | Token management: `l8tunnel-server token create --name laptop --allow-names "myapp,homebox" --allow-tcp`, `token list`, `token revoke`. Revoking a token disconnects its sessions immediately. |
 | V-3 | Name policies per token: allowed name patterns, max tunnels, allowed tunnel types, allowed TCP ports. |
 | V-4 | Name reservation: persistent names bound to a token. |

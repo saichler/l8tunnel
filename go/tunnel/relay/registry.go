@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"sync"
 	"time"
+
+	"github.com/saichler/l8tunnel/go/types/l8tunnel"
 )
 
 // namePattern keeps tunnel names valid as DNS labels, since tunnels are
@@ -16,11 +18,12 @@ var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 // same name and port.
 type reservation struct {
 	name    string
+	typ     l8tunnel.TunnelType
 	token   string
 	agentID string
-	port    int
+	port    int           // TCP/SSH only
 	session *agentSession // nil while parked
-	tunnel  *tcpTunnel    // nil while parked
+	tunnel  *tunnel       // nil while parked
 	timer   *time.Timer   // grace-period expiry while parked
 }
 
@@ -47,12 +50,12 @@ func (errNameTaken) Error() string { return "name taken" }
 // reclaimed. An active one of the same token and agent ID is taken over:
 // the agent reconnected before the relay noticed its old session died.
 // existed reports whether the reservation was reclaimed or taken over.
-func (r *registry) claim(name, token, agentID string, sess *agentSession) (res *reservation, existed bool, err error) {
+func (r *registry) claim(name string, typ l8tunnel.TunnelType, token, agentID string, sess *agentSession) (res *reservation, existed bool, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	res = r.names[name]
 	if res == nil {
-		res = &reservation{name: name, token: token, agentID: agentID, session: sess}
+		res = &reservation{name: name, typ: typ, token: token, agentID: agentID, session: sess}
 		r.names[name] = res
 		return res, false, nil
 	}
@@ -75,6 +78,7 @@ func (r *registry) claim(name, token, agentID string, sess *agentSession) (res *
 		res.timer.Stop()
 		res.timer = nil
 	}
+	res.typ = typ
 	res.agentID = agentID
 	res.session = sess
 	res.tunnel = nil
@@ -82,7 +86,7 @@ func (r *registry) claim(name, token, agentID string, sess *agentSession) (res *
 }
 
 // activate records the tunnel now serving res.
-func (r *registry) activate(res *reservation, t *tcpTunnel) {
+func (r *registry) activate(res *reservation, t *tunnel) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	res.tunnel = t
@@ -140,15 +144,16 @@ func (r *registry) deleteLocked(res *reservation) {
 	}
 }
 
-// lookupActive returns the tunnel currently serving name, or nil.
-func (r *registry) lookupActive(name string) *tcpTunnel {
+// lookup returns the tunnel serving name (nil while parked) and the
+// reservation's type; found is false when the name isn't reserved.
+func (r *registry) lookup(name string) (t *tunnel, typ l8tunnel.TunnelType, found bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	res := r.names[name]
 	if res == nil {
-		return nil
+		return nil, l8tunnel.TunnelType_TUNNEL_TYPE_UNSPECIFIED, false
 	}
-	return res.tunnel
+	return res.tunnel, res.typ, true
 }
 
 func (r *registry) reservePort(port int) bool {

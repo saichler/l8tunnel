@@ -16,6 +16,10 @@ const (
 	// ALPN is the TLS application protocol an agent must negotiate. The relay
 	// uses it to tell agent control connections apart from public traffic.
 	ALPN = "l8tunnel/1"
+	// ConnectALPN is offered by "l8tunnel connect" (mode B). For a host
+	// name with no active tunnel, the relay fails the handshake for these
+	// clients instead of serving its HTTP error page.
+	ConnectALPN = "l8tunnel-connect/1"
 )
 
 // RandomID returns a random hex string of 2*nbytes characters.

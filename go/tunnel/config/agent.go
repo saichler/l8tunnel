@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/saichler/l8tunnel/go/tunnel/agent"
 	"github.com/saichler/l8tunnel/go/tunnel/transport"
+	"github.com/saichler/l8tunnel/go/types/l8tunnel"
 )
 
 // AgentFile is the agent configuration, from agent.yaml or the command
@@ -26,10 +28,12 @@ type AgentFile struct {
 
 // TunnelFile is one tunnel in AgentFile.
 type TunnelFile struct {
-	Name       string `yaml:"name"`
-	Type       string `yaml:"type"`
-	Target     string `yaml:"target"`
-	PublicPort uint32 `yaml:"public_port"`
+	Name string `yaml:"name"`
+	Type string `yaml:"type"`
+	// Target is a port, host:port, or for http tunnels http(s)://host:port.
+	Target             string `yaml:"target"`
+	PublicPort         uint32 `yaml:"public_port"`
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"`
 }
 
 // LoadAgentFile reads an agent YAML file.
@@ -67,7 +71,21 @@ func (f *AgentFile) AgentConfig(logger *slog.Logger, version string) (agent.Conf
 		if err != nil {
 			return agent.Config{}, fmt.Errorf("tunnel %q: %w", t.Name, err)
 		}
-		tunnels = append(tunnels, agent.TunnelConfig{Name: t.Name, Type: typ, Target: t.Target, PublicPort: t.PublicPort})
+		target, useTLS, err := parseTarget(t.Target)
+		if err != nil {
+			return agent.Config{}, fmt.Errorf("tunnel %q: %w", t.Name, err)
+		}
+		if strings.Contains(t.Target, "://") && typ != l8tunnel.TunnelType_TUNNEL_TYPE_HTTP {
+			return agent.Config{}, fmt.Errorf("tunnel %q: a scheme in the target applies only to http tunnels", t.Name)
+		}
+		tunnels = append(tunnels, agent.TunnelConfig{
+			Name:               t.Name,
+			Type:               typ,
+			Target:             target,
+			TargetTLS:          useTLS,
+			InsecureSkipVerify: t.InsecureSkipVerify,
+			PublicPort:         t.PublicPort,
+		})
 	}
 	return agent.Config{
 		RelayAddr: f.Relay,

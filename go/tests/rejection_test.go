@@ -109,14 +109,20 @@ func TestAgentConfigFailsFast(t *testing.T) {
 		t.Fatalf("valid config rejected: %v", err)
 	}
 	cases := map[string]func(c *agent.Config){
-		"no token":         func(c *agent.Config) { c.Token = "" },
-		"bad relay addr":   func(c *agent.Config) { c.RelayAddr = "localhost" },
-		"no TLS":           func(c *agent.Config) { c.TLS = nil },
-		"no tunnels":       func(c *agent.Config) { c.Tunnels = nil },
-		"bad target":       func(c *agent.Config) { c.Tunnels = []agent.TunnelConfig{{Type: tcpType, Target: "nope"}} },
-		"unsupported type": func(c *agent.Config) { c.Tunnels[0].Type = l8tunnel.TunnelType_TUNNEL_TYPE_HTTP },
-		"unspecified type": func(c *agent.Config) { c.Tunnels[0].Type = l8tunnel.TunnelType_TUNNEL_TYPE_UNSPECIFIED },
-		"reversed backoff": func(c *agent.Config) { c.ReconnectMin, c.ReconnectMax = time.Minute, time.Second },
+		"no token":       func(c *agent.Config) { c.Token = "" },
+		"bad relay addr": func(c *agent.Config) { c.RelayAddr = "localhost" },
+		"no TLS":         func(c *agent.Config) { c.TLS = nil },
+		"no tunnels":     func(c *agent.Config) { c.Tunnels = nil },
+		"bad target":     func(c *agent.Config) { c.Tunnels = []agent.TunnelConfig{{Type: tcpType, Target: "nope"}} },
+		"http public port": func(c *agent.Config) {
+			c.Tunnels[0].Type, c.Tunnels[0].PublicPort = l8tunnel.TunnelType_TUNNEL_TYPE_HTTP, 22001
+		},
+		"insecure without tls": func(c *agent.Config) {
+			c.Tunnels[0].Type, c.Tunnels[0].InsecureSkipVerify = l8tunnel.TunnelType_TUNNEL_TYPE_HTTP, true
+		},
+		"tls target on tcp": func(c *agent.Config) { c.Tunnels[0].TargetTLS = true },
+		"unspecified type":  func(c *agent.Config) { c.Tunnels[0].Type = l8tunnel.TunnelType_TUNNEL_TYPE_UNSPECIFIED },
+		"reversed backoff":  func(c *agent.Config) { c.ReconnectMin, c.ReconnectMax = time.Minute, time.Second },
 		"duplicate names": func(c *agent.Config) {
 			c.Tunnels = []agent.TunnelConfig{{Name: "a", Type: tcpType, Target: "h:1"}, {Name: "a", Type: tcpType, Target: "h:2"}}
 		},

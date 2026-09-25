@@ -38,9 +38,9 @@ func ClientTLSConfig(serverName, caFile string) (*tls.Config, error) {
 }
 
 // TunnelClientTLSConfig returns the TLS config for reaching a TCP/SSH
-// tunnel through the relay by SNI (mode B). It offers no ALPN.
+// tunnel through the relay by SNI (mode B).
 func TunnelClientTLSConfig(serverName, caFile string) (*tls.Config, error) {
-	return clientTLSConfig(serverName, caFile, nil)
+	return clientTLSConfig(serverName, caFile, []string{protocol.ConnectALPN})
 }
 
 func clientTLSConfig(serverName, caFile string, alpn []string) (*tls.Config, error) {

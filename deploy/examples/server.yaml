@@ -9,14 +9,32 @@ base_domain: tunnel.example.com
 # public_host: tunnel.example.com           # default: base_domain (mode A addresses)
 
 listen:
-  https: ":443"          # agents + mode B (SNI) tunnel traffic
+  https: ":443"          # agents + every tunnel's SNI traffic
+  http: ":80"            # redirects to HTTPS; "off" disables it
+
+# public_https_port: 443  # if clients reach listen.https through a port forward
+# forwarded_headers: true # add X-Forwarded-For/-Host/-Proto to http tunnel requests
 
 # bind: ""                # address tunnel ports bind to; default all interfaces
 tcp_port_range: "22000-22999"   # mode A: one public port per TCP/SSH tunnel
 
+# Certificates: set exactly one of tls (your own files) or acme.
 tls:
   cert: /etc/l8tunnel/tls/fullchain.pem
   key: /etc/l8tunnel/tls/privkey.pem
+
+# acme:
+#   # dns01: one wildcard certificate for *.tunnel.example.com through your DNS
+#   # provider's API (recommended). http01: a certificate per tunnel host through
+#   # port 80, requested when a tunnel is first reached (Let's Encrypt limits
+#   # these to 50 new names per week per registered domain).
+#   mode: dns01
+#   email: admin@example.com
+#   dns_provider: cloudflare               # supported: cloudflare
+#   dns_credentials:
+#     api_token: ${CF_API_TOKEN}           # Zone:Read + DNS:Edit on the zone
+#   # storage: /var/lib/l8tunnel/acme      # accounts and certificates
+#   # ca: https://acme-staging-v02.api.letsencrypt.org/directory   # for testing
 
 # One "<name> <token>" per line. Generate a token with:
 #   openssl rand -hex 24

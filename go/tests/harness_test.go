@@ -124,6 +124,8 @@ type relayOpts struct {
 	pki              *testPKI
 	heartbeat        time.Duration
 	grace            time.Duration
+	httpListener     bool // also listen for plain HTTP on 127.0.0.1
+	noForwarded      bool // disable X-Forwarded-* headers
 }
 
 // relayEnv is a running relay on 127.0.0.1.
@@ -166,17 +168,23 @@ func startRelayWith(t *testing.T, opts relayOpts) *relayEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
+	httpAddr := ""
+	if opts.httpListener {
+		httpAddr = "127.0.0.1:0"
+	}
 	srv, err := relay.New(relay.Config{
-		ControlAddr:       opts.controlAddr,
-		TLS:               tlsCfg,
-		BaseDomain:        baseDomain,
-		Tokens:            tokens,
-		BindHost:          "127.0.0.1",
-		TCPPortMin:        opts.portMin,
-		TCPPortMax:        opts.portMax,
-		HeartbeatInterval: opts.heartbeat,
-		NameGracePeriod:   opts.grace,
-		Logger:            testLogger(),
+		ControlAddr:             opts.controlAddr,
+		HTTPAddr:                httpAddr,
+		DisableForwardedHeaders: opts.noForwarded,
+		TLS:                     tlsCfg,
+		BaseDomain:              baseDomain,
+		Tokens:                  tokens,
+		BindHost:                "127.0.0.1",
+		TCPPortMin:              opts.portMin,
+		TCPPortMax:              opts.portMax,
+		HeartbeatInterval:       opts.heartbeat,
+		NameGracePeriod:         opts.grace,
+		Logger:                  testLogger(),
 	})
 	if err != nil {
 		t.Fatal(err)

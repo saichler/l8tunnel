@@ -31,7 +31,7 @@ type agentSession struct {
 	writeMu  sync.Mutex
 	lastSeen atomic.Int64 // unix nanos of the last control message
 	// tunnels is only touched by the session's control-loop goroutine.
-	tunnels []*tcpTunnel
+	tunnels []*tunnel
 }
 
 // serveAgent runs an agent session on a connection that negotiated the
@@ -169,7 +169,7 @@ func (sess *agentSession) register(req *l8tunnel.Register) *l8tunnel.ControlMess
 	if len(req.GetTunnels()) == 0 {
 		return protocol.ErrorMessage(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST, "no tunnels requested")
 	}
-	var opened []*tcpTunnel
+	var opened []*tunnel
 	for _, spec := range req.GetTunnels() {
 		t, err := sess.server.openTunnel(sess, spec)
 		if err != nil {
@@ -190,7 +190,9 @@ func (sess *agentSession) register(req *l8tunnel.Register) *l8tunnel.ControlMess
 	for _, t := range opened {
 		sess.tunnels = append(sess.tunnels, t)
 		endpoints = append(endpoints, t.endpoint)
-		sess.server.goTracked(t.serve)
+		if t.listener != nil {
+			sess.server.goTracked(t.serve)
+		}
 		sess.log.Info("tunnel open", "name", t.endpoint.GetName(), "type", t.endpoint.GetType().String(),
 			"public", t.endpoint.GetPublicAddress(), "hostname", t.endpoint.GetHostname(), "reclaimed", t.existed)
 	}

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"time"
@@ -25,22 +26,51 @@ func (a *Agent) serveStream(ctx context.Context, stream *transport.Stream) {
 		return
 	}
 	log := a.log.With("client", open.GetClientAddr())
-	target := a.targetFor(open.GetTunnelId())
-	if target == "" {
+	t, ok := a.tunnelFor(open.GetTunnelId())
+	if !ok {
 		log.Warn("stream for unknown tunnel", "tunnel_id", open.GetTunnelId())
 		stream.Close()
 		return
 	}
-
-	dialer := &net.Dialer{Timeout: dialTimeout}
-	conn, err := dialer.DialContext(ctx, "tcp", target)
+	conn, err := dialTarget(ctx, t)
 	if err != nil {
-		log.Warn("dial target failed", "target", target, "error", err)
+		log.Warn("dial target failed", "target", t.targetString(), "error", err)
 		stream.Close()
 		return
 	}
-	res := pipe.Join(stream, conn.(*net.TCPConn))
-	log.Debug("stream closed", "target", target, "bytes_in", res.AtoB, "bytes_out", res.BtoA, "error", res.Err)
+	res := pipe.Join(stream, conn)
+	log.Debug("stream closed", "target", t.targetString(), "bytes_in", res.AtoB, "bytes_out", res.BtoA, "error", res.Err)
+}
+
+// dialTarget connects to a tunnel's local target, over TLS when the
+// target is HTTPS.
+func dialTarget(ctx context.Context, t TunnelConfig) (pipe.Conn, error) {
+	dialer := &net.Dialer{Timeout: dialTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", t.Target)
+	if err != nil {
+		return nil, err
+	}
+	tcp := conn.(*net.TCPConn)
+	if !t.TargetTLS {
+		return tcp, nil
+	}
+	host, _, err := net.SplitHostPort(t.Target)
+	if err != nil {
+		tcp.Close()
+		return nil, err
+	}
+	tconn := tls.Client(tcp, &tls.Config{
+		ServerName:         host,
+		InsecureSkipVerify: t.InsecureSkipVerify,
+		NextProtos:         []string{"http/1.1"},
+	})
+	hctx, cancel := context.WithTimeout(ctx, dialTimeout)
+	defer cancel()
+	if err := tconn.HandshakeContext(hctx); err != nil {
+		tcp.Close()
+		return nil, fmt.Errorf("TLS handshake with %s: %w", t.Target, err)
+	}
+	return tconn, nil
 }
 
 func readStreamOpen(stream *transport.Stream) (*l8tunnel.StreamOpen, error) {
