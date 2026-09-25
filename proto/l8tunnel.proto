@@ -1,0 +1,101 @@
+/*
+ * l8tunnel control protocol.
+ *
+ * Every message on the control stream (the first mux stream the agent opens)
+ * is a length-prefixed ControlMessage. Every data stream the relay opens
+ * starts with a single length-prefixed StreamOpen, followed by raw bytes.
+ */
+syntax = "proto3";
+
+package l8tunnel;
+
+option go_package = "./types/l8tunnel";
+
+enum TunnelType {
+  TUNNEL_TYPE_UNSPECIFIED = 0;
+  TUNNEL_TYPE_HTTP = 1; // TLS terminated at the relay, routed by Host header
+  TUNNEL_TYPE_TLS = 2;  // TLS passthrough, routed by SNI
+  TUNNEL_TYPE_TCP = 3;  // raw TCP on a dedicated public port
+  TUNNEL_TYPE_SSH = 4;  // TCP preset, default local target :22
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_UNAUTHORIZED = 1;
+  ERROR_CODE_UNSUPPORTED_VERSION = 2;
+  ERROR_CODE_INVALID_REQUEST = 3;
+  ERROR_CODE_UNSUPPORTED_TUNNEL_TYPE = 4;
+  ERROR_CODE_NAME_TAKEN = 5;
+  ERROR_CODE_PORT_NOT_ALLOWED = 6;
+  ERROR_CODE_PORT_UNAVAILABLE = 7;
+}
+
+message Hello {
+  uint32 protocol_version = 1;
+  string token = 2;
+  string agent_id = 3;
+  string agent_version = 4;
+  string os = 5;
+  string arch = 6;
+}
+
+message Welcome {
+  string session_id = 1;
+  int64 heartbeat_interval_ms = 2;
+}
+
+message Error {
+  ErrorCode code = 1;
+  string message = 2;
+}
+
+// TunnelSpec never carries the local target: the agent keeps the
+// tunnel -> target mapping, so the relay can't make it dial anything else.
+message TunnelSpec {
+  string name = 1;
+  TunnelType type = 2;
+  uint32 public_port = 3; // TCP/SSH only; 0 = allocate from the relay's range
+}
+
+message Register {
+  repeated TunnelSpec tunnels = 1;
+}
+
+message Endpoint {
+  string tunnel_id = 1;
+  string name = 2;
+  TunnelType type = 3;
+  string public_address = 4;
+  uint32 public_port = 5;
+}
+
+message Registered {
+  repeated Endpoint endpoints = 1;
+}
+
+message Ping {
+  uint64 nonce = 1;
+  int64 sent_unix_nano = 2;
+}
+
+message Pong {
+  uint64 nonce = 1;
+  int64 sent_unix_nano = 2;
+}
+
+message ControlMessage {
+  oneof body {
+    Hello hello = 1;
+    Welcome welcome = 2;
+    Error error = 3;
+    Register register = 4;
+    Registered registered = 5;
+    Ping ping = 6;
+    Pong pong = 7;
+  }
+}
+
+message StreamOpen {
+  string tunnel_id = 1;
+  string client_addr = 2;
+}
