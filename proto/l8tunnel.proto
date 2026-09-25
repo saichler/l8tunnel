@@ -65,8 +65,9 @@ message Endpoint {
   string tunnel_id = 1;
   string name = 2;
   TunnelType type = 3;
-  string public_address = 4;
+  string public_address = 4; // mode A: <public_host>:<public_port>
   uint32 public_port = 5;
+  string hostname = 6;       // mode B: TLS SNI host, <name>.<base_domain>
 }
 
 message Registered {

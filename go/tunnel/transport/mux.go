@@ -28,8 +28,8 @@ func (s *Stream) CloseWrite() error {
 
 func muxConfig(logger *slog.Logger) *yamux.Config {
 	cfg := yamux.DefaultConfig()
-	cfg.EnableKeepAlive = true
-	cfg.KeepAliveInterval = 15 * time.Second
+	// Liveness is checked by Ping/Pong heartbeats on the control stream.
+	cfg.EnableKeepAlive = false
 	cfg.ConnectionWriteTimeout = 30 * time.Second
 	cfg.LogOutput = nil
 	cfg.Logger = slog.NewLogLogger(logger.Handler(), slog.LevelWarn)

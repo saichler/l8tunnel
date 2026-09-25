@@ -3,37 +3,152 @@ package relay
 import (
 	"regexp"
 	"sync"
+	"time"
 )
 
-// namePattern keeps tunnel names valid as DNS labels, since HTTP tunnels
-// become <name>.<base-domain>.
+// namePattern keeps tunnel names valid as DNS labels, since tunnels are
+// reachable as <name>.<base-domain>.
 var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// reservation holds a tunnel name, and its public port, for one token.
+// While the owning session is connected it is active; after the session
+// ends it is parked for the grace period so the same token can reclaim the
+// same name and port.
+type reservation struct {
+	name    string
+	token   string
+	agentID string
+	port    int
+	session *agentSession // nil while parked
+	tunnel  *tcpTunnel    // nil while parked
+	timer   *time.Timer   // grace-period expiry while parked
+}
 
 // registry tracks the tunnel names and public ports in use on the relay.
 type registry struct {
-	mu    sync.Mutex
-	names map[string]struct{}
-	ports map[int]struct{}
+	mu     sync.Mutex
+	grace  time.Duration
+	names  map[string]*reservation
+	ports  map[int]struct{}
+	closed bool
 }
 
-func newRegistry() *registry {
-	return &registry{names: map[string]struct{}{}, ports: map[int]struct{}{}}
+func newRegistry(grace time.Duration) *registry {
+	return &registry{grace: grace, names: map[string]*reservation{}, ports: map[int]struct{}{}}
 }
 
-func (r *registry) reserveName(name string) bool {
+// errNameTaken is returned by claim when another token (or another agent
+// of the same token) holds the name.
+type errNameTaken struct{}
+
+func (errNameTaken) Error() string { return "name taken" }
+
+// claim reserves name for sess. A parked reservation of the same token is
+// reclaimed. An active one of the same token and agent ID is taken over:
+// the agent reconnected before the relay noticed its old session died.
+// existed reports whether the reservation was reclaimed or taken over.
+func (r *registry) claim(name, token, agentID string, sess *agentSession) (res *reservation, existed bool, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, taken := r.names[name]; taken {
-		return false
+	res = r.names[name]
+	if res == nil {
+		res = &reservation{name: name, token: token, agentID: agentID, session: sess}
+		r.names[name] = res
+		return res, false, nil
 	}
-	r.names[name] = struct{}{}
-	return true
+	if res.token != token {
+		return nil, false, errNameTaken{}
+	}
+	if res.session != nil {
+		if res.agentID != agentID || res.session == sess {
+			return nil, false, errNameTaken{}
+		}
+		// Take over: stop the stale session's listener so the port can be
+		// bound again. The stale session's cleanup won't park it, because
+		// the reservation no longer points at that session.
+		if res.tunnel != nil {
+			res.tunnel.close()
+		}
+		res.session.log.Info("tunnel taken over by reconnected agent", "name", name)
+	}
+	if res.timer != nil {
+		res.timer.Stop()
+		res.timer = nil
+	}
+	res.agentID = agentID
+	res.session = sess
+	res.tunnel = nil
+	return res, true, nil
 }
 
-func (r *registry) releaseName(name string) {
+// activate records the tunnel now serving res.
+func (r *registry) activate(res *reservation, t *tcpTunnel) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.names, name)
+	res.tunnel = t
+}
+
+// park keeps res reserved for the grace period after sess ends. It does
+// nothing if another session took res over.
+func (r *registry) park(res *reservation, sess *agentSession) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if res.session != sess {
+		return
+	}
+	res.session = nil
+	res.tunnel = nil
+	if r.closed {
+		r.deleteLocked(res)
+		return
+	}
+	res.timer = time.AfterFunc(r.grace, func() { r.expire(res) })
+}
+
+// rollback undoes a claim whose tunnel failed to open: a reclaimed
+// reservation is parked again, a new one is released.
+func (r *registry) rollback(res *reservation, sess *agentSession, existed bool) {
+	if existed {
+		r.park(res, sess)
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if res.session == sess {
+		r.deleteLocked(res)
+	}
+}
+
+func (r *registry) expire(res *reservation) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.names[res.name] == res && res.session == nil {
+		r.deleteLocked(res)
+	}
+}
+
+func (r *registry) deleteLocked(res *reservation) {
+	if res.timer != nil {
+		res.timer.Stop()
+		res.timer = nil
+	}
+	if r.names[res.name] == res {
+		delete(r.names, res.name)
+	}
+	if res.port != 0 {
+		delete(r.ports, res.port)
+	}
+}
+
+// lookupActive returns the tunnel currently serving name, or nil.
+func (r *registry) lookupActive(name string) *tcpTunnel {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	res := r.names[name]
+	if res == nil {
+		return nil
+	}
+	return res.tunnel
 }
 
 func (r *registry) reservePort(port int) bool {
@@ -50,4 +165,33 @@ func (r *registry) releasePort(port int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.ports, port)
+}
+
+// setPort records res's public port, releasing the one it held before.
+func (r *registry) setPort(res *reservation, port int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if res.port != 0 && res.port != port {
+		delete(r.ports, res.port)
+	}
+	res.port = port
+}
+
+// portOf returns the public port res holds, or 0.
+func (r *registry) portOf(res *reservation) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return res.port
+}
+
+// close stops every grace timer and releases parked reservations.
+func (r *registry) close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+	for _, res := range r.names {
+		if res.session == nil {
+			r.deleteLocked(res)
+		}
+	}
 }

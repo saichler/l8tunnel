@@ -1,0 +1,16 @@
+# /etc/l8tunnel/agent.yaml
+
+relay: connect.tunnel.example.com:443
+# server_name: connect.tunnel.example.com   # default: host of relay
+# ca: /etc/l8tunnel/ca.pem                  # default: system roots
+
+# ${VAR} is read from the environment; leaving token out uses $L8TUNNEL_TOKEN.
+token: ${L8TUNNEL_TOKEN}
+
+tunnels:
+  - name: homebox
+    type: ssh                 # target defaults to 127.0.0.1:22
+    public_port: 22001        # mode A; mode B is always homebox.tunnel.example.com
+  - name: nas
+    type: tcp
+    target: 192.168.1.20:22   # any host the agent can reach

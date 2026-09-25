@@ -54,8 +54,11 @@ func TestTCPTunnelRoundTripLargePayload(t *testing.T) {
 	if ep.GetName() != "echo" || ep.GetPublicPort() < uint32(env.portMin) || ep.GetPublicPort() > uint32(env.portMax) {
 		t.Fatalf("unexpected endpoint %v (range %d-%d)", ep, env.portMin, env.portMax)
 	}
-	if want := fmt.Sprintf("localhost:%d", ep.GetPublicPort()); ep.GetPublicAddress() != want {
+	if want := fmt.Sprintf("%s:%d", baseDomain, ep.GetPublicPort()); ep.GetPublicAddress() != want {
 		t.Fatalf("public address = %q, want %q", ep.GetPublicAddress(), want)
+	}
+	if want := "echo." + baseDomain; ep.GetHostname() != want {
+		t.Fatalf("hostname = %q, want %q", ep.GetHostname(), want)
 	}
 
 	payload := make([]byte, 8<<20)
@@ -131,13 +134,7 @@ func TestAgentDisconnectFreesNameAndPort(t *testing.T) {
 	ra := startAgent(t, env, agent.TunnelConfig{Name: "reuse", Type: tcpType, Target: target})
 	port := ra.agent.Endpoints()[0].GetPublicPort()
 
-	ra.cancel()
-	select {
-	case err := <-ra.done:
-		ra.done <- err
-	case <-time.After(5 * time.Second):
-		t.Fatal("agent did not stop after cancel")
-	}
+	stopAgent(t, ra)
 	waitUntil(t, 5*time.Second, "public port to close", func() bool {
 		conn, err := net.DialTimeout("tcp", publicAddr(port), time.Second)
 		if err != nil {
@@ -147,7 +144,7 @@ func TestAgentDisconnectFreesNameAndPort(t *testing.T) {
 		return false
 	})
 
-	// The same name and the relay's only port are available again.
+	// The same token reclaims the name and the relay's only port.
 	ra2 := startAgent(t, env, agent.TunnelConfig{Name: "reuse", Type: tcpType, Target: target})
 	if got := ra2.agent.Endpoints()[0].GetPublicPort(); got != port {
 		t.Fatalf("second agent got port %d, want %d", got, port)
@@ -168,24 +165,6 @@ func TestTargetDownClosesPublicConnection(t *testing.T) {
 	var netErr net.Error
 	if n != 0 || (errors.As(err, &netErr) && netErr.Timeout()) {
 		t.Fatalf("expected the connection to be closed, got n=%d err=%v", n, err)
-	}
-}
-
-func TestRelayShutdownEndsAgentSession(t *testing.T) {
-	env := startRelay(t, 1)
-	ra := startAgent(t, env, agent.TunnelConfig{Name: "bye", Type: tcpType, Target: startEchoServer(t)})
-
-	if err := env.srv.Close(); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err := <-ra.done:
-		ra.done <- err
-		if err == nil {
-			t.Fatal("agent Run returned nil after the relay shut down")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("agent did not notice the relay shutting down")
 	}
 }
 

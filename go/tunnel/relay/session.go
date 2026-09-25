@@ -1,13 +1,13 @@
 package relay
 
 import (
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
@@ -21,33 +21,22 @@ const handshakeTimeout = 10 * time.Second
 
 // agentSession is one authenticated agent connection.
 type agentSession struct {
-	server  *Server
-	id      string
-	log     *slog.Logger
-	mux     *transport.Session
-	control *transport.Stream
-	writeMu sync.Mutex
+	server   *Server
+	id       string
+	token    string // name of the token the agent authenticated with
+	agentID  string
+	log      *slog.Logger
+	mux      *transport.Session
+	control  *transport.Stream
+	writeMu  sync.Mutex
+	lastSeen atomic.Int64 // unix nanos of the last control message
 	// tunnels is only touched by the session's control-loop goroutine.
 	tunnels []*tcpTunnel
 }
 
-func (s *Server) serveAgent(conn *tls.Conn) {
-	defer conn.Close()
-	remote := conn.RemoteAddr().String()
-	log := s.log.With("remote", remote)
-
-	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
-	err := conn.HandshakeContext(ctx)
-	cancel()
-	if err != nil {
-		log.Warn("agent TLS handshake failed", "error", err)
-		return
-	}
-	if err := transport.CheckALPN(conn); err != nil {
-		log.Warn("rejected non-agent connection", "error", err)
-		return
-	}
-
+// serveAgent runs an agent session on a connection that negotiated the
+// l8tunnel ALPN on the control SNI.
+func (s *Server) serveAgent(conn *tls.Conn, log *slog.Logger) {
 	mux, err := transport.NewServerSession(conn, log)
 	if err != nil {
 		log.Warn("agent session setup failed", "error", err)
@@ -66,8 +55,10 @@ func (s *Server) serveAgent(conn *tls.Conn) {
 		log.Warn("agent rejected", "error", err)
 		return
 	}
+	sess.lastSeen.Store(time.Now().UnixNano())
+	s.goTracked(sess.watchdog)
 	sess.controlLoop()
-	log.Info("agent disconnected", "session", sess.id)
+	sess.log.Info("agent disconnected")
 }
 
 // handshake accepts the control stream, authenticates Hello and replies
@@ -106,12 +97,21 @@ func (sess *agentSession) handshake() error {
 		sess.send(protocol.ErrorMessage(l8tunnel.ErrorCode_ERROR_CODE_UNAUTHORIZED, "invalid token"))
 		return fmt.Errorf("invalid token from agent %q", hello.GetAgentId())
 	}
+	if hello.GetAgentId() == "" {
+		sess.send(protocol.ErrorMessage(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST, "agent ID is required"))
+		return fmt.Errorf("hello without agent ID")
+	}
 
-	sess.log = sess.log.With("session", sess.id, "token", tokenName, "agent", hello.GetAgentId())
+	sess.token = tokenName
+	sess.agentID = hello.GetAgentId()
+	sess.log = sess.log.With("session", sess.id, "token", tokenName, "agent", sess.agentID)
 	sess.log.Info("agent connected", "version", hello.GetAgentVersion(),
 		"os", hello.GetOs(), "arch", hello.GetArch())
 	return sess.send(&l8tunnel.ControlMessage{Body: &l8tunnel.ControlMessage_Welcome{
-		Welcome: &l8tunnel.Welcome{SessionId: sess.id},
+		Welcome: &l8tunnel.Welcome{
+			SessionId:           sess.id,
+			HeartbeatIntervalMs: sess.server.cfg.HeartbeatInterval.Milliseconds(),
+		},
 	}})
 }
 
@@ -124,6 +124,7 @@ func (sess *agentSession) controlLoop() {
 			}
 			return
 		}
+		sess.lastSeen.Store(time.Now().UnixNano())
 		var reply *l8tunnel.ControlMessage
 		switch body := msg.GetBody().(type) {
 		case *l8tunnel.ControlMessage_Register:
@@ -143,6 +144,26 @@ func (sess *agentSession) controlLoop() {
 	}
 }
 
+// watchdog drops the session when the agent misses too many heartbeats.
+func (sess *agentSession) watchdog() {
+	interval := sess.server.cfg.HeartbeatInterval
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-sess.mux.Done():
+			return
+		case <-ticker.C:
+			silent := time.Since(time.Unix(0, sess.lastSeen.Load()))
+			if silent > missedHeartbeats*interval {
+				sess.log.Warn("agent missed heartbeats, dropping session", "silent", silent.String())
+				sess.mux.Close()
+				return
+			}
+		}
+	}
+}
+
 // register opens every requested tunnel, or none of them.
 func (sess *agentSession) register(req *l8tunnel.Register) *l8tunnel.ControlMessage {
 	if len(req.GetTunnels()) == 0 {
@@ -154,6 +175,7 @@ func (sess *agentSession) register(req *l8tunnel.Register) *l8tunnel.ControlMess
 		if err != nil {
 			for _, o := range opened {
 				o.close()
+				sess.server.registry.rollback(o.res, sess, o.existed)
 			}
 			sess.log.Warn("tunnel registration rejected", "name", spec.GetName(), "error", err)
 			var rerr *protocol.RemoteError
@@ -169,17 +191,20 @@ func (sess *agentSession) register(req *l8tunnel.Register) *l8tunnel.ControlMess
 		sess.tunnels = append(sess.tunnels, t)
 		endpoints = append(endpoints, t.endpoint)
 		sess.server.goTracked(t.serve)
-		sess.log.Info("tunnel open", "name", t.endpoint.GetName(),
-			"type", t.endpoint.GetType().String(), "public", t.endpoint.GetPublicAddress())
+		sess.log.Info("tunnel open", "name", t.endpoint.GetName(), "type", t.endpoint.GetType().String(),
+			"public", t.endpoint.GetPublicAddress(), "hostname", t.endpoint.GetHostname(), "reclaimed", t.existed)
 	}
 	return &l8tunnel.ControlMessage{Body: &l8tunnel.ControlMessage_Registered{
 		Registered: &l8tunnel.Registered{Endpoints: endpoints},
 	}}
 }
 
+// closeTunnels stops the session's listeners and parks their reservations
+// for the grace period.
 func (sess *agentSession) closeTunnels() {
 	for _, t := range sess.tunnels {
 		t.close()
+		sess.server.registry.park(t.res, sess)
 	}
 	sess.tunnels = nil
 }

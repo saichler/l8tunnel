@@ -95,8 +95,8 @@ Nothing has to open on the private network. The agent only makes outbound connec
 | C-2 | Streams are multiplexed over the single TLS connection (for example with [yamux](https://github.com/hashicorp/yamux) or smux). Each public connection maps to one stream. |
 | C-3 | The agent authenticates with a bearer token (v1). mTLS with agent certificates is optional in v1.1. |
 | C-4 | The agent sends a `Register` message listing the tunnels it wants: type (http, tls, tcp/ssh), requested name, local target and options. The relay replies with the assigned public endpoints or errors (name taken, not authorized). |
-| C-5 | Heartbeats every 15s (configurable). The relay drops the session and frees its tunnels after 3 missed heartbeats. |
-| C-6 | Reconnect with exponential backoff (1s → 60s cap, with jitter). A reserved name is held for the same token for a grace period (default 5 min), so the URL stays stable across reconnects. |
+| C-5 | Heartbeats every 15s (configurable on the relay, sent to the agent in `Welcome`). The agent sends `Ping`, the relay answers `Pong`. Either side drops the session after 3 missed intervals; the relay then parks the session's tunnels (see C-6). |
+| C-6 | Reconnect with exponential backoff (1s → 60s cap, ±20% jitter), reset after every session that registered. Relay-assigned names are requested again on reconnect. A disconnected session's names and ports are held for the same token for a grace period (default 5 min), so URLs and ports stay stable across reconnects. An agent reconnecting with the same agent ID takes over its previous session's tunnels even if the relay hasn't detected that session as dead yet. Errors returned by the relay (bad token, name taken, invalid request) are not retried: the agent exits with the error. |
 | C-7 | **WebSocket transport:** for networks that only allow HTTP proxies, the agent can carry the control session over WebSocket (`wss://`) and honor `HTTPS_PROXY`. The transport is chosen explicitly in config (`transport: tls \| wss`). The agent never switches transports silently: if the configured transport fails, it logs the error and keeps retrying that transport. |
 | C-8 | The protocol is versioned. The relay rejects incompatible agent versions with a clear error. |
 
@@ -127,7 +127,7 @@ SSH carries no hostname (no SNI or Host header), so routing needs a different ap
 | ID | Requirement |
 |---|---|
 | S-1 | **Mode A:** the relay allocates a TCP port from a configured range (for example 22000–22999) or a requested fixed port. The mapping stays stable per tunnel name and token. |
-| S-2 | **Mode B:** the relay accepts TLS on :443 with SNI `<name>.<base-domain>`. For tunnels of type `tcp`/`ssh`, it terminates the outer TLS and forwards the plain inner byte stream (the SSH protocol) to the agent. |
+| S-2 | **Mode B:** the relay accepts TLS on :443 with SNI `<name>.<base-domain>`. For tunnels of type `tcp`/`ssh`, it terminates the outer TLS and forwards the plain inner byte stream (the SSH protocol) to the agent. A handshake for an unknown name, a tunnel with no connected agent, or the control SNI without the l8tunnel ALPN fails, so clients get an error instead of an empty connection. The name `connect` (the control SNI's label) can't be used as a tunnel name. |
 | S-3 | `l8tunnel connect <host>` opens TLS to the relay with the given SNI and pipes stdin/stdout, so it works as an OpenSSH `ProxyCommand`. |
 | S-4 | The relay never sees SSH credentials or plaintext, because SSH encrypts end to end. The relay only carries bytes. |
 | S-5 | Optional IP allowlist per SSH tunnel. Optional "tunnel access token" required by `l8tunnel connect` in mode B, as a second factor at the relay layer. |
@@ -137,9 +137,10 @@ SSH carries no hostname (no SNI or Host header), so routing needs a different ap
 
 Quick start:
 ```bash
-l8tunnel-agent --relay tunnel.example.com --token $TOKEN http 8080 --name myapp
-l8tunnel-agent --relay tunnel.example.com --token $TOKEN ssh --name homebox          # local :22
-l8tunnel-agent --relay tunnel.example.com --token $TOKEN tcp 5432 --name db --port 25432
+l8tunnel-agent --relay connect.tunnel.example.com:443 --token $TOKEN http 8080 --name myapp   # P2
+l8tunnel-agent --relay connect.tunnel.example.com:443 --token $TOKEN ssh --name homebox      # local :22
+l8tunnel-agent --relay connect.tunnel.example.com:443 --token $TOKEN tcp 5432 --name db --port 25432
+l8tunnel-agent --config /etc/l8tunnel/agent.yaml
 ```
 
 Config file (`/etc/l8tunnel/agent.yaml`):
@@ -161,8 +162,8 @@ tunnels:
 
 | ID | Requirement |
 |---|---|
-| A-1 | CLI flags for one-off tunnels. A YAML config for persistent multi-tunnel setups. |
-| A-2 | Runs as a systemd service. Ships an example unit file. |
+| A-1 | CLI flags for one-off tunnels. A YAML config for persistent multi-tunnel setups. The two can't be mixed. YAML parsing is strict: unknown keys are errors. A value written as `${VAR}` is read from the environment, and an unset variable is an error. The token defaults to `$L8TUNNEL_TOKEN`. The server is configured only through its YAML file (`l8tunnel-server --config`). |
+| A-2 | Runs as a systemd service. Ships unit files for the agent and the server (`deploy/systemd/`, the server binds :443 through `CAP_NET_BIND_SERVICE`, not root) and example configs (`deploy/examples/`), which a test keeps parseable. |
 | A-3 | Prints the assigned public URL or port at startup and logs connect/disconnect events. |
 | A-4 | Target can be any reachable host:port, not only localhost, so a single agent can expose multiple LAN hosts. |
 | A-5 | Local status endpoint/command (`l8tunnel-agent status`) showing tunnels, connection state and byte counts. |

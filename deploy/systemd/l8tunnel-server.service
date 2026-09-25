@@ -1,0 +1,37 @@
+[Unit]
+Description=l8tunnel relay server
+Documentation=https://github.com/saichler/l8tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=l8tunnel
+Group=l8tunnel
+ExecStart=/usr/local/bin/l8tunnel-server --config /etc/l8tunnel/server.yaml
+Restart=on-failure
+RestartSec=2s
+
+# Bind :443 and the tunnel port range without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+# Hardening
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+StateDirectory=l8tunnel
+ReadOnlyPaths=/etc/l8tunnel
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

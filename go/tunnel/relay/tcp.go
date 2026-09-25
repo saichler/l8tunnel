@@ -13,13 +13,15 @@ import (
 	"github.com/saichler/l8tunnel/go/types/l8tunnel"
 )
 
-// tcpTunnel serves one TCP/SSH tunnel's public port.
+// tcpTunnel serves one TCP/SSH tunnel: its dedicated public port (mode A)
+// and SNI connections routed to it by the router (mode B).
 type tcpTunnel struct {
 	server    *Server
 	session   *agentSession
+	res       *reservation
+	existed   bool // the reservation was reclaimed, not newly created
 	endpoint  *l8tunnel.Endpoint
 	listener  *net.TCPListener
-	port      int
 	closeOnce sync.Once
 }
 
@@ -27,8 +29,8 @@ func remoteErr(code l8tunnel.ErrorCode, format string, args ...interface{}) erro
 	return &protocol.RemoteError{Code: code, Message: fmt.Sprintf(format, args...)}
 }
 
-// openTunnel validates spec, reserves its name and public port, and
-// starts listening. The caller starts serving it.
+// openTunnel validates spec, claims its name and public port, and starts
+// listening. The caller starts serving it.
 func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tcpTunnel, error) {
 	switch spec.GetType() {
 	case l8tunnel.TunnelType_TUNNEL_TYPE_TCP, l8tunnel.TunnelType_TUNNEL_TYPE_SSH:
@@ -48,33 +50,53 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tcp
 		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST,
 			"tunnel name %q must be a lowercase DNS label", name)
 	}
-	if !s.registry.reserveName(name) {
+	hostname := name + "." + s.cfg.BaseDomain
+	if hostname == s.cfg.ControlSNI {
+		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST,
+			"tunnel name %q is reserved for the relay", name)
+	}
+	res, existed, err := s.registry.claim(name, sess.token, sess.agentID, sess)
+	if err != nil {
 		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_NAME_TAKEN, "tunnel name %q is taken", name)
 	}
 
-	ln, port, err := s.listenTunnelPort(int(spec.GetPublicPort()))
+	ln, port, err := s.listenTunnelPort(res, int(spec.GetPublicPort()))
 	if err != nil {
-		s.registry.releaseName(name)
+		s.registry.rollback(res, sess, existed)
 		return nil, err
 	}
-	return &tcpTunnel{
+	t := &tcpTunnel{
 		server:   s,
 		session:  sess,
+		res:      res,
+		existed:  existed,
 		listener: ln,
-		port:     port,
 		endpoint: &l8tunnel.Endpoint{
 			TunnelId:      protocol.RandomID(8),
 			Name:          name,
 			Type:          spec.GetType(),
 			PublicAddress: net.JoinHostPort(s.cfg.PublicHost, strconv.Itoa(port)),
 			PublicPort:    uint32(port),
+			Hostname:      hostname,
 		},
-	}, nil
+	}
+	s.registry.activate(res, t)
+	return t, nil
 }
 
-// listenTunnelPort binds the requested port, or the first free port in the
-// relay's range when requested is 0.
-func (s *Server) listenTunnelPort(requested int) (*net.TCPListener, int, error) {
+// listenTunnelPort binds res's public port. A reclaimed reservation keeps
+// its port unless a different one is requested; otherwise the requested
+// port, or the first free port in the relay's range, is used.
+func (s *Server) listenTunnelPort(res *reservation, requested int) (*net.TCPListener, int, error) {
+	held := s.registry.portOf(res)
+	if held != 0 && (requested == 0 || requested == held) {
+		ln, err := s.listen(held)
+		if err != nil {
+			return nil, 0, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_PORT_UNAVAILABLE,
+				"port %d is unavailable: %v", held, err)
+		}
+		return ln, held, nil
+	}
 	if requested != 0 {
 		if requested < s.cfg.TCPPortMin || requested > s.cfg.TCPPortMax {
 			return nil, 0, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_PORT_NOT_ALLOWED,
@@ -85,10 +107,12 @@ func (s *Server) listenTunnelPort(requested int) (*net.TCPListener, int, error) 
 			return nil, 0, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_PORT_UNAVAILABLE,
 				"port %d is unavailable: %v", requested, err)
 		}
+		s.registry.setPort(res, requested)
 		return ln, requested, nil
 	}
 	for port := s.cfg.TCPPortMin; port <= s.cfg.TCPPortMax; port++ {
 		if ln, err := s.tryListen(port); err == nil {
+			s.registry.setPort(res, port)
 			return ln, port, nil
 		}
 	}
@@ -96,16 +120,12 @@ func (s *Server) listenTunnelPort(requested int) (*net.TCPListener, int, error) 
 		"no free port in the relay's range %d-%d", s.cfg.TCPPortMin, s.cfg.TCPPortMax)
 }
 
+// tryListen reserves port in the registry and binds it.
 func (s *Server) tryListen(port int) (*net.TCPListener, error) {
 	if !s.registry.reservePort(port) {
-		return nil, fmt.Errorf("port %d is used by another tunnel", port)
+		return nil, fmt.Errorf("port %d is held by another tunnel", port)
 	}
-	addr, err := net.ResolveTCPAddr("tcp", net.JoinHostPort(s.cfg.BindHost, strconv.Itoa(port)))
-	if err != nil {
-		s.registry.releasePort(port)
-		return nil, err
-	}
-	ln, err := net.ListenTCP("tcp", addr)
+	ln, err := s.listen(port)
 	if err != nil {
 		s.registry.releasePort(port)
 		return nil, err
@@ -113,6 +133,15 @@ func (s *Server) tryListen(port int) (*net.TCPListener, error) {
 	return ln, nil
 }
 
+func (s *Server) listen(port int) (*net.TCPListener, error) {
+	addr, err := net.ResolveTCPAddr("tcp", net.JoinHostPort(s.cfg.BindHost, strconv.Itoa(port)))
+	if err != nil {
+		return nil, err
+	}
+	return net.ListenTCP("tcp", addr)
+}
+
+// serve accepts mode A connections on the tunnel's public port.
 func (t *tcpTunnel) serve() {
 	log := t.session.log.With("tunnel", t.endpoint.GetName())
 	for {
@@ -125,20 +154,20 @@ func (t *tcpTunnel) serve() {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		t.server.goTracked(func() { t.forward(conn) })
+		t.server.goTracked(func() { t.forward(conn, conn.RemoteAddr().String()) })
 	}
 }
 
 // forward carries one public connection to the agent over a new stream.
-func (t *tcpTunnel) forward(conn *net.TCPConn) {
-	log := t.session.log.With("tunnel", t.endpoint.GetName(), "client", conn.RemoteAddr().String())
+func (t *tcpTunnel) forward(conn pipe.Conn, clientAddr string) {
+	log := t.session.log.With("tunnel", t.endpoint.GetName(), "client", clientAddr)
 	stream, err := t.session.mux.Open()
 	if err != nil {
 		log.Warn("open stream to agent failed", "error", err)
 		conn.Close()
 		return
 	}
-	open := &l8tunnel.StreamOpen{TunnelId: t.endpoint.GetTunnelId(), ClientAddr: conn.RemoteAddr().String()}
+	open := &l8tunnel.StreamOpen{TunnelId: t.endpoint.GetTunnelId(), ClientAddr: clientAddr}
 	if err := protocol.WriteMessage(stream, open); err != nil {
 		log.Warn("send stream header failed", "error", err)
 		stream.Close()
@@ -149,12 +178,9 @@ func (t *tcpTunnel) forward(conn *net.TCPConn) {
 	log.Debug("public connection closed", "bytes_in", res.AtoB, "bytes_out", res.BtoA, "error", res.Err)
 }
 
-// close stops accepting public connections and frees the name and port.
-// Connections already in flight end when the agent session closes.
+// close stops accepting mode A connections. The name and port stay in the
+// registry until the reservation is parked, released or expires.
+// Connections in flight end when the agent session closes.
 func (t *tcpTunnel) close() {
-	t.closeOnce.Do(func() {
-		t.listener.Close()
-		t.server.registry.releasePort(t.port)
-		t.server.registry.releaseName(t.endpoint.GetName())
-	})
+	t.closeOnce.Do(func() { t.listener.Close() })
 }

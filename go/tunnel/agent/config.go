@@ -8,12 +8,19 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/saichler/l8tunnel/go/types/l8tunnel"
 )
 
-// DefaultSSHTarget is used for SSH tunnels without an explicit target.
-const DefaultSSHTarget = "127.0.0.1:22"
+const (
+	// DefaultSSHTarget is used for SSH tunnels without an explicit target.
+	DefaultSSHTarget = "127.0.0.1:22"
+	// DefaultReconnectMin and DefaultReconnectMax bound the exponential
+	// backoff between reconnect attempts.
+	DefaultReconnectMin = time.Second
+	DefaultReconnectMax = time.Minute
+)
 
 // TunnelConfig is one tunnel the agent exposes.
 type TunnelConfig struct {
@@ -39,6 +46,10 @@ type Config struct {
 	// Version is reported to the relay.
 	Version string
 	Tunnels []TunnelConfig
+	// ReconnectMin and ReconnectMax bound the reconnect backoff; zero
+	// means DefaultReconnectMin / DefaultReconnectMax.
+	ReconnectMin time.Duration
+	ReconnectMax time.Duration
 	// Logger receives the agent's logs; nil means slog.Default().
 	Logger *slog.Logger
 }
@@ -77,6 +88,15 @@ func (c *Config) validate() error {
 			}
 			names[t.Name] = true
 		}
+	}
+	if c.ReconnectMin == 0 {
+		c.ReconnectMin = DefaultReconnectMin
+	}
+	if c.ReconnectMax == 0 {
+		c.ReconnectMax = DefaultReconnectMax
+	}
+	if c.ReconnectMin < 0 || c.ReconnectMin > c.ReconnectMax {
+		return fmt.Errorf("agent: invalid reconnect backoff %s-%s", c.ReconnectMin, c.ReconnectMax)
 	}
 	if c.Logger == nil {
 		c.Logger = slog.Default()

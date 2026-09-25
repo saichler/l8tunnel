@@ -84,7 +84,7 @@ func TestNonAgentALPNRejected(t *testing.T) {
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(pem)
 	conn, err := tls.Dial("tcp", env.addr, &tls.Config{
-		ServerName: "localhost", RootCAs: pool, NextProtos: []string{"http/1.1"},
+		ServerName: controlSNI, RootCAs: pool, NextProtos: []string{"http/1.1"},
 	})
 	if err != nil {
 		return // handshake refused: no shared application protocol
@@ -116,6 +116,7 @@ func TestAgentConfigFailsFast(t *testing.T) {
 		"bad target":       func(c *agent.Config) { c.Tunnels = []agent.TunnelConfig{{Type: tcpType, Target: "nope"}} },
 		"unsupported type": func(c *agent.Config) { c.Tunnels[0].Type = l8tunnel.TunnelType_TUNNEL_TYPE_HTTP },
 		"unspecified type": func(c *agent.Config) { c.Tunnels[0].Type = l8tunnel.TunnelType_TUNNEL_TYPE_UNSPECIFIED },
+		"reversed backoff": func(c *agent.Config) { c.ReconnectMin, c.ReconnectMax = time.Minute, time.Second },
 		"duplicate names": func(c *agent.Config) {
 			c.Tunnels = []agent.TunnelConfig{{Name: "a", Type: tcpType, Target: "h:1"}, {Name: "a", Type: tcpType, Target: "h:2"}}
 		},
@@ -143,17 +144,19 @@ func TestRelayConfigFailsFast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	good := relay.Config{ControlAddr: ":0", TLS: tlsCfg, Tokens: tokens, PublicHost: "h", TCPPortMin: 1000, TCPPortMax: 1001}
+	good := relay.Config{ControlAddr: ":0", TLS: tlsCfg, Tokens: tokens, BaseDomain: baseDomain, TCPPortMin: 1000, TCPPortMax: 1001}
 	if _, err := relay.New(good); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
 	cases := map[string]func(c *relay.Config){
 		"no control addr": func(c *relay.Config) { c.ControlAddr = "" },
 		"no TLS":          func(c *relay.Config) { c.TLS = nil },
-		"no ALPN":         func(c *relay.Config) { c.TLS = &tls.Config{Certificates: tlsCfg.Certificates} },
+		"no certificate":  func(c *relay.Config) { c.TLS = &tls.Config{} },
 		"no tokens":       func(c *relay.Config) { c.Tokens = nil },
-		"no public host":  func(c *relay.Config) { c.PublicHost = "" },
+		"no base domain":  func(c *relay.Config) { c.BaseDomain = "" },
+		"bare base":       func(c *relay.Config) { c.BaseDomain = "localhost" },
 		"reversed range":  func(c *relay.Config) { c.TCPPortMin, c.TCPPortMax = 2000, 1000 },
+		"negative grace":  func(c *relay.Config) { c.NameGracePeriod = -time.Second },
 	}
 	for name, mutate := range cases {
 		cfg := good

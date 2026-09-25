@@ -1,0 +1,11 @@
+# ~/.ssh/config on the machine you connect FROM.
+
+# Mode B: everything over the relay's port 443, through l8tunnel connect.
+Host *.tunnel.example.com
+    ProxyCommand l8tunnel connect %h
+
+# Zero-install alternative to l8tunnel connect:
+#   ProxyCommand openssl s_client -quiet -connect %h:443 -servername %h
+
+# Mode A needs no config:
+#   ssh -p 22001 user@tunnel.example.com

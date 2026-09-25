@@ -15,7 +15,7 @@ import (
 )
 
 // ServerTLSConfig loads the relay's certificate and returns a TLS 1.3-only
-// config that offers the l8tunnel ALPN.
+// config. The relay chooses the ALPN per server name (see relay.Server).
 func ServerTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 	if certFile == "" || keyFile == "" {
 		return nil, fmt.Errorf("both a TLS certificate and key file are required")
@@ -27,7 +27,6 @@ func ServerTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS13,
-		NextProtos:   []string{protocol.ALPN},
 	}, nil
 }
 
@@ -35,13 +34,23 @@ func ServerTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 // against the relay's certificate. When caFile is set, only that CA is
 // trusted; otherwise the system roots are used.
 func ClientTLSConfig(serverName, caFile string) (*tls.Config, error) {
+	return clientTLSConfig(serverName, caFile, []string{protocol.ALPN})
+}
+
+// TunnelClientTLSConfig returns the TLS config for reaching a TCP/SSH
+// tunnel through the relay by SNI (mode B). It offers no ALPN.
+func TunnelClientTLSConfig(serverName, caFile string) (*tls.Config, error) {
+	return clientTLSConfig(serverName, caFile, nil)
+}
+
+func clientTLSConfig(serverName, caFile string, alpn []string) (*tls.Config, error) {
 	if serverName == "" {
 		return nil, fmt.Errorf("a TLS server name is required")
 	}
 	cfg := &tls.Config{
 		ServerName: serverName,
 		MinVersion: tls.VersionTLS13,
-		NextProtos: []string{protocol.ALPN},
+		NextProtos: alpn,
 	}
 	if caFile != "" {
 		pem, err := os.ReadFile(caFile)
@@ -57,9 +66,8 @@ func ClientTLSConfig(serverName, caFile string) (*tls.Config, error) {
 	return cfg, nil
 }
 
-// DialRelay opens a TLS connection to the relay and checks that the
-// l8tunnel ALPN was negotiated.
-func DialRelay(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error) {
+// Dial opens a TLS connection to the relay and completes the handshake.
+func Dial(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error) {
 	dialer := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second},
 		Config:    cfg,
@@ -68,12 +76,21 @@ func DialRelay(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, er
 	if err != nil {
 		return nil, fmt.Errorf("dial relay %s: %w", addr, err)
 	}
-	tlsConn := conn.(*tls.Conn)
-	if err := CheckALPN(tlsConn); err != nil {
-		tlsConn.Close()
+	return conn.(*tls.Conn), nil
+}
+
+// DialRelay opens an agent connection to the relay and checks that the
+// l8tunnel ALPN was negotiated.
+func DialRelay(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error) {
+	conn, err := Dial(ctx, addr, cfg)
+	if err != nil {
 		return nil, err
 	}
-	return tlsConn, nil
+	if err := CheckALPN(conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
 }
 
 // CheckALPN verifies that a completed handshake negotiated the l8tunnel ALPN.

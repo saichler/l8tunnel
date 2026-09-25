@@ -10,8 +10,9 @@ import (
 	"time"
 )
 
-// Server is the relay: it accepts agent sessions on the control address
-// and serves their tunnels' public listeners.
+// Server is the relay. Its TLS listener carries agent sessions (control
+// SNI) and mode B tunnel traffic (<name>.<base-domain>); each TCP/SSH
+// tunnel also gets a dedicated public port (mode A).
 type Server struct {
 	cfg      Config
 	log      *slog.Logger
@@ -32,7 +33,7 @@ func New(cfg Config) (*Server, error) {
 	return &Server{
 		cfg:      cfg,
 		log:      cfg.Logger,
-		registry: newRegistry(),
+		registry: newRegistry(cfg.NameGracePeriod),
 		sessions: map[*agentSession]struct{}{},
 	}, nil
 }
@@ -51,11 +52,11 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("relay: listen on %s: %w", s.cfg.ControlAddr, err)
 	}
-	s.listener = tls.NewListener(ln, s.cfg.TLS)
-	s.log.Info("relay listening", "control", ln.Addr().String(),
-		"tcp_ports", fmt.Sprintf("%d-%d", s.cfg.TCPPortMin, s.cfg.TCPPortMax))
+	s.listener = tls.NewListener(ln, s.listenerTLSConfig())
+	s.log.Info("relay listening", "addr", ln.Addr().String(), "control_sni", s.cfg.ControlSNI,
+		"base_domain", s.cfg.BaseDomain, "tcp_ports", fmt.Sprintf("%d-%d", s.cfg.TCPPortMin, s.cfg.TCPPortMax))
 	s.wg.Add(1)
-	go s.acceptAgents(s.listener)
+	go s.acceptConns(s.listener)
 	return nil
 }
 
@@ -69,8 +70,9 @@ func (s *Server) Addr() net.Addr {
 	return s.listener.Addr()
 }
 
-// Close stops accepting agents, ends every session (which closes their
-// tunnels) and waits for all goroutines to finish.
+// Close stops accepting connections, ends every session (which closes
+// their tunnels), waits for all goroutines to finish and releases every
+// reservation.
 func (s *Server) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -87,10 +89,11 @@ func (s *Server) Close() error {
 	}
 	s.mu.Unlock()
 	s.wg.Wait()
+	s.registry.close()
 	return err
 }
 
-func (s *Server) acceptAgents(ln net.Listener) {
+func (s *Server) acceptConns(ln net.Listener) {
 	defer s.wg.Done()
 	for {
 		conn, err := ln.Accept()
@@ -98,14 +101,14 @@ func (s *Server) acceptAgents(ln net.Listener) {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
-			s.log.Warn("accept agent connection failed", "error", err)
+			s.log.Warn("accept connection failed", "error", err)
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			s.serveAgent(conn.(*tls.Conn))
+			s.serveConn(conn.(*tls.Conn))
 		}()
 	}
 }

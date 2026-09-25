@@ -1,0 +1,26 @@
+# /etc/l8tunnel/server.yaml
+#
+# DNS: point tunnel.example.com and *.tunnel.example.com at the relay.
+# The certificate must cover connect.tunnel.example.com and
+# *.tunnel.example.com (a wildcard for *.tunnel.example.com covers both).
+
+base_domain: tunnel.example.com
+# control_sni: connect.tunnel.example.com   # default: connect.<base_domain>
+# public_host: tunnel.example.com           # default: base_domain (mode A addresses)
+
+listen:
+  https: ":443"          # agents + mode B (SNI) tunnel traffic
+
+# bind: ""                # address tunnel ports bind to; default all interfaces
+tcp_port_range: "22000-22999"   # mode A: one public port per TCP/SSH tunnel
+
+tls:
+  cert: /etc/l8tunnel/tls/fullchain.pem
+  key: /etc/l8tunnel/tls/privkey.pem
+
+# One "<name> <token>" per line. Generate a token with:
+#   openssl rand -hex 24
+tokens_file: /etc/l8tunnel/tokens
+
+# heartbeat_interval: 15s   # agents ping this often; dropped after 3 misses
+# name_grace_period: 5m     # names/ports stay reserved for the token after a disconnect

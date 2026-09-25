@@ -1,0 +1,34 @@
+[Unit]
+Description=l8tunnel agent
+Documentation=https://github.com/saichler/l8tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=true
+# Put L8TUNNEL_TOKEN=... here (mode 0600) and use token: ${L8TUNNEL_TOKEN}
+# in agent.yaml, or leave token out of agent.yaml entirely.
+EnvironmentFile=-/etc/l8tunnel/agent.env
+ExecStart=/usr/local/bin/l8tunnel-agent --config /etc/l8tunnel/agent.yaml
+# The agent reconnects on its own; this only covers crashes and fatal
+# errors such as a revoked token, which systemd then keeps retrying slowly.
+Restart=always
+RestartSec=10s
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadOnlyPaths=/etc/l8tunnel
+
+[Install]
+WantedBy=multi-user.target
