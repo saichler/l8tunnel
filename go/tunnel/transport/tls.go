@@ -7,9 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"net"
 	"os"
-	"time"
 
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 )
@@ -66,23 +64,25 @@ func clientTLSConfig(serverName, caFile string, alpn []string) (*tls.Config, err
 	return cfg, nil
 }
 
-// Dial opens a TLS connection to the relay and completes the handshake.
-func Dial(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error) {
-	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second},
-		Config:    cfg,
-	}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+// Dial opens a TLS connection to the relay (directly or through an HTTP
+// proxy, see DialOptions) and completes the handshake.
+func Dial(ctx context.Context, addr string, cfg *tls.Config, opts DialOptions) (*tls.Conn, error) {
+	raw, err := opts.dialTCP(ctx, addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial relay %s: %w", addr, err)
 	}
-	return conn.(*tls.Conn), nil
+	conn := tls.Client(raw, cfg)
+	if err := conn.HandshakeContext(ctx); err != nil {
+		raw.Close()
+		return nil, fmt.Errorf("dial relay %s: %w", addr, err)
+	}
+	return conn, nil
 }
 
 // DialRelay opens an agent connection to the relay and checks that the
 // l8tunnel ALPN was negotiated.
-func DialRelay(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error) {
-	conn, err := Dial(ctx, addr, cfg)
+func DialRelay(ctx context.Context, addr string, cfg *tls.Config, opts DialOptions) (*tls.Conn, error) {
+	conn, err := Dial(ctx, addr, cfg, opts)
 	if err != nil {
 		return nil, err
 	}

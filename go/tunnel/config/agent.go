@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/saichler/l8tunnel/go/tunnel/agent"
+	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 	"github.com/saichler/l8tunnel/go/tunnel/transport"
 	"github.com/saichler/l8tunnel/go/types/l8tunnel"
 )
@@ -22,7 +23,16 @@ type AgentFile struct {
 	// CA is a CA file to trust for the relay; empty means system roots.
 	CA string `yaml:"ca"`
 	// Token may be written as ${ENV_VAR}; empty means $L8TUNNEL_TOKEN.
-	Token   string       `yaml:"token"`
+	Token string `yaml:"token"`
+	// StatusSocket serves "l8tunnel-agent status"; empty disables it.
+	StatusSocket string `yaml:"status_socket"`
+	// Transport is tls (default) or wss (WebSocket, for HTTP-only
+	// networks).
+	Transport string `yaml:"transport"`
+	// Proxy is an http:// proxy URL, "none", or empty for HTTPS_PROXY /
+	// NO_PROXY from the environment.
+	Proxy   string       `yaml:"proxy"`
+	Log     LogFile      `yaml:"log"`
 	Tunnels []TunnelFile `yaml:"tunnels"`
 }
 
@@ -34,6 +44,19 @@ type TunnelFile struct {
 	Target             string `yaml:"target"`
 	PublicPort         uint32 `yaml:"public_port"`
 	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"`
+	// AllowIPs and DenyIPs are addresses or CIDRs; deny wins.
+	AllowIPs []string `yaml:"allow_ips"`
+	DenyIPs  []string `yaml:"deny_ips"`
+	// BasicAuth users (http tunnels); hashes from "l8tunnel hash-password".
+	BasicAuth []BasicAuthUser `yaml:"basic_auth"`
+	// AccessToken (tcp/ssh) may be written as ${ENV_VAR}.
+	AccessToken string `yaml:"access_token"`
+}
+
+// BasicAuthUser is one basic_auth entry.
+type BasicAuthUser struct {
+	User         string `yaml:"user"`
+	PasswordHash string `yaml:"password_hash"`
 }
 
 // LoadAgentFile reads an agent YAML file.
@@ -67,7 +90,7 @@ func (f *AgentFile) AgentConfig(logger *slog.Logger, version string) (agent.Conf
 	}
 	tunnels := make([]agent.TunnelConfig, 0, len(f.Tunnels))
 	for _, t := range f.Tunnels {
-		typ, err := agent.ParseTunnelType(t.Type)
+		typ, err := protocol.ParseTunnelType(t.Type)
 		if err != nil {
 			return agent.Config{}, fmt.Errorf("tunnel %q: %w", t.Name, err)
 		}
@@ -78,6 +101,14 @@ func (f *AgentFile) AgentConfig(logger *slog.Logger, version string) (agent.Conf
 		if strings.Contains(t.Target, "://") && typ != l8tunnel.TunnelType_TUNNEL_TYPE_HTTP {
 			return agent.Config{}, fmt.Errorf("tunnel %q: a scheme in the target applies only to http tunnels", t.Name)
 		}
+		accessToken, err := expandEnv("tunnel "+t.Name+" access_token", t.AccessToken)
+		if err != nil {
+			return agent.Config{}, err
+		}
+		var users []agent.BasicUser
+		for _, u := range t.BasicAuth {
+			users = append(users, agent.BasicUser{Username: u.User, BcryptHash: u.PasswordHash})
+		}
 		tunnels = append(tunnels, agent.TunnelConfig{
 			Name:               t.Name,
 			Type:               typ,
@@ -85,6 +116,10 @@ func (f *AgentFile) AgentConfig(logger *slog.Logger, version string) (agent.Conf
 			TargetTLS:          useTLS,
 			InsecureSkipVerify: t.InsecureSkipVerify,
 			PublicPort:         t.PublicPort,
+			AllowIPs:           t.AllowIPs,
+			DenyIPs:            t.DenyIPs,
+			BasicUsers:         users,
+			AccessToken:        accessToken,
 		})
 	}
 	return agent.Config{
@@ -92,6 +127,8 @@ func (f *AgentFile) AgentConfig(logger *slog.Logger, version string) (agent.Conf
 		TLS:       tlsCfg,
 		Token:     token,
 		Version:   version,
+		Transport: f.Transport,
+		Proxy:     f.Proxy,
 		Tunnels:   tunnels,
 		Logger:    logger,
 	}, nil

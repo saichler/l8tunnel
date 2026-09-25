@@ -7,16 +7,31 @@ relay: connect.tunnel.example.com:443
 # ${VAR} is read from the environment; leaving token out uses $L8TUNNEL_TOKEN.
 token: ${L8TUNNEL_TOKEN}
 
+# Serves "l8tunnel-agent status" (connection state, tunnels, traffic).
+status_socket: /run/l8tunnel-agent/status.sock
+
+# transport: tls          # or wss: WebSocket over TLS, for networks that only allow HTTP(S)
+# proxy: http://proxy.corp:3128   # default: HTTPS_PROXY / NO_PROXY; "none" disables
+# log: {format: text, level: info}
+
 tunnels:
   - name: homebox
     type: ssh                 # target defaults to 127.0.0.1:22
     public_port: 22001        # mode A; mode B is always homebox.tunnel.example.com
+    allow_ips: [203.0.113.0/24]   # only these clients (mode A and B); deny_ips wins
+  - name: backup
+    type: ssh
+    target: 192.168.1.40:22
+    access_token: ${BACKUP_ACCESS_TOKEN}  # mode B only: l8tunnel connect --access-token
   - name: nas
     type: tcp
     target: 192.168.1.20:22   # any host the agent can reach
   - name: grafana
     type: http                # https://grafana.tunnel.example.com, TLS terminated at the relay
     target: 3000              # a bare port means 127.0.0.1:3000
+    basic_auth:               # hashes from: l8tunnel hash-password
+      - user: admin
+        password_hash: "$2a$10$7EqJtq98hPqEX7fNZaFWoOhi5BWX4Z3Z6KqQo5nsgvs1R3.x2T6Ku"  # placeholder: use your own
   - name: homeassistant
     type: http
     target: https://192.168.1.30:8123   # the agent speaks TLS to the service

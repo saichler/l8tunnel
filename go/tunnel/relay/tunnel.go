@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/pipe"
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
-	"github.com/saichler/l8tunnel/go/tunnel/transport"
 	"github.com/saichler/l8tunnel/go/types/l8tunnel"
 )
 
@@ -24,7 +24,9 @@ type tunnel struct {
 	res       *reservation
 	existed   bool // the reservation was reclaimed, not newly created
 	endpoint  *l8tunnel.Endpoint
-	listener  *net.TCPListener // TCP/SSH only
+	listener  *net.TCPListener // TCP/SSH without an access token
+	access    *auth.Access
+	stats     tunnelStats
 	closeOnce sync.Once
 }
 
@@ -46,9 +48,14 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 	default:
 		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST, "invalid tunnel type %s", typ)
 	}
-	if !hasPublicPort(typ) && spec.GetPublicPort() != 0 {
-		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST,
-			"public_port applies only to tcp and ssh tunnels, not %s", typ)
+	policy := sess.token.Policy
+	if !policy.AllowsType(protocol.TunnelTypeName(typ)) {
+		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_FORBIDDEN,
+			"token %q may not register %s tunnels", sess.token.Name, protocol.TunnelTypeName(typ))
+	}
+	access, err := s.checkAccess(typ, spec)
+	if err != nil {
+		return nil, err
 	}
 
 	name := spec.GetName()
@@ -59,13 +66,21 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST,
 			"tunnel name %q must be a lowercase DNS label", name)
 	}
+	if !policy.AllowsName(name) {
+		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_FORBIDDEN,
+			"token %q may not use the tunnel name %q", sess.token.Name, name)
+	}
 	hostname := name + "." + s.cfg.BaseDomain
 	if hostname == s.cfg.ControlSNI {
 		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST,
 			"tunnel name %q is reserved for the relay", name)
 	}
-	res, existed, err := s.registry.claim(name, typ, sess.token, sess.agentID, sess)
-	if err != nil {
+	res, existed, err := s.registry.claim(name, typ, sess.token.ID, sess.agentID, sess, policy.MaxTunnels)
+	switch {
+	case errors.Is(err, errMaxTunnels):
+		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_FORBIDDEN,
+			"token %q may have at most %d tunnels", sess.token.Name, policy.MaxTunnels)
+	case err != nil:
 		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_NAME_TAKEN, "tunnel name %q is taken", name)
 	}
 
@@ -74,6 +89,7 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 		session: sess,
 		res:     res,
 		existed: existed,
+		access:  access,
 		endpoint: &l8tunnel.Endpoint{
 			TunnelId: protocol.RandomID(8),
 			Name:     name,
@@ -82,8 +98,8 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 		},
 	}
 	switch {
-	case hasPublicPort(typ):
-		ln, port, err := s.listenTunnelPort(res, int(spec.GetPublicPort()))
+	case hasPublicPort(typ) && !access.RequiresToken():
+		ln, port, err := s.listenTunnelPort(res, int(spec.GetPublicPort()), policy)
 		if err != nil {
 			s.registry.rollback(res, sess, existed)
 			return nil, err
@@ -100,6 +116,15 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 	return t, nil
 }
 
+// checkAccess parses a spec's access policy and checks it fits the type.
+func (s *Server) checkAccess(typ l8tunnel.TunnelType, spec *l8tunnel.TunnelSpec) (*auth.Access, error) {
+	access, err := auth.ValidateSpecAccess(typ, spec.GetPublicPort(), spec.GetAccess())
+	if err != nil {
+		return nil, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST, "tunnel %q: %v", spec.GetName(), err)
+	}
+	return access, nil
+}
+
 // httpsHost is host with the public HTTPS port, which is left out when 443.
 func (s *Server) httpsHost(host string) string {
 	if port := s.publicHTTPSPort(); port != 443 {
@@ -108,10 +133,11 @@ func (s *Server) httpsHost(host string) string {
 	return host
 }
 
-// listenTunnelPort binds res's public port. A reclaimed reservation keeps
-// its port unless a different one is requested; otherwise the requested
-// port, or the first free port in the relay's range, is used.
-func (s *Server) listenTunnelPort(res *reservation, requested int) (*net.TCPListener, int, error) {
+// listenTunnelPort binds res's public port. A reclaimed or operator
+// reservation keeps its port unless a different one is requested;
+// otherwise the requested port, or the first free port in the relay's
+// range (narrowed by the token's policy), is used.
+func (s *Server) listenTunnelPort(res *reservation, requested int, policy auth.Policy) (*net.TCPListener, int, error) {
 	held := s.registry.portOf(res)
 	if held != 0 && (requested == 0 || requested == held) {
 		ln, err := s.listen(held)
@@ -121,10 +147,15 @@ func (s *Server) listenTunnelPort(res *reservation, requested int) (*net.TCPList
 		}
 		return ln, held, nil
 	}
+	lo, hi, ok := policy.PortRange(s.cfg.TCPPortMin, s.cfg.TCPPortMax)
 	if requested != 0 {
 		if requested < s.cfg.TCPPortMin || requested > s.cfg.TCPPortMax {
 			return nil, 0, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_PORT_NOT_ALLOWED,
 				"port %d is outside the relay's range %d-%d", requested, s.cfg.TCPPortMin, s.cfg.TCPPortMax)
+		}
+		if !ok || requested < lo || requested > hi {
+			return nil, 0, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_FORBIDDEN,
+				"the token's policy doesn't allow port %d (allowed: %s)", requested, policy.Ports)
 		}
 		ln, err := s.tryListen(requested)
 		if err != nil {
@@ -134,14 +165,18 @@ func (s *Server) listenTunnelPort(res *reservation, requested int) (*net.TCPList
 		s.registry.setPort(res, requested)
 		return ln, requested, nil
 	}
-	for port := s.cfg.TCPPortMin; port <= s.cfg.TCPPortMax; port++ {
+	if !ok {
+		return nil, 0, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_FORBIDDEN,
+			"the token's port range %s doesn't overlap the relay's %d-%d", policy.Ports, s.cfg.TCPPortMin, s.cfg.TCPPortMax)
+	}
+	for port := lo; port <= hi; port++ {
 		if ln, err := s.tryListen(port); err == nil {
 			s.registry.setPort(res, port)
 			return ln, port, nil
 		}
 	}
 	return nil, 0, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_PORT_UNAVAILABLE,
-		"no free port in the relay's range %d-%d", s.cfg.TCPPortMin, s.cfg.TCPPortMax)
+		"no free port in the range %d-%d", lo, hi)
 }
 
 // tryListen reserves port in the registry and binds it.
@@ -178,6 +213,10 @@ func (t *tunnel) serve() {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
+		if !t.server.admit(conn.RemoteAddr(), t.access, log) {
+			conn.Close()
+			continue
+		}
 		t.server.goTracked(func() { t.forward(conn, conn.RemoteAddr().String()) })
 	}
 }
@@ -192,8 +231,14 @@ func (t *tunnel) OpenStream(_ context.Context, clientAddr string) (net.Conn, err
 	return t.openStream(clientAddr)
 }
 
-// openStream opens a stream to the agent and sends its header.
-func (t *tunnel) openStream(clientAddr string) (*transport.Stream, error) {
+// Access implements httpproxy.Tunnel.
+func (t *tunnel) Access() *auth.Access {
+	return t.access
+}
+
+// openStream opens a stream to the agent, sends its header, and counts it
+// in the tunnel's statistics.
+func (t *tunnel) openStream(clientAddr string) (*countedStream, error) {
 	stream, err := t.session.mux.Open()
 	if err != nil {
 		return nil, err
@@ -203,7 +248,7 @@ func (t *tunnel) openStream(clientAddr string) (*transport.Stream, error) {
 		stream.Close()
 		return nil, err
 	}
-	return stream, nil
+	return t.stats.track(stream), nil
 }
 
 // forward carries one public connection to the agent over a new stream.
@@ -215,8 +260,10 @@ func (t *tunnel) forward(conn pipe.Conn, clientAddr string) {
 		conn.Close()
 		return
 	}
+	start := time.Now()
 	res := pipe.Join(conn, stream)
-	log.Debug("public connection closed", "bytes_in", res.AtoB, "bytes_out", res.BtoA, "error", res.Err)
+	log.Info("connection closed", "duration_ms", time.Since(start).Milliseconds(),
+		"bytes_in", res.AtoB, "bytes_out", res.BtoA, "error", res.Err)
 }
 
 // close stops accepting mode A connections and drops cached HTTP

@@ -17,10 +17,12 @@ import (
 
 // routeConfigs are the TLS configs the router terminates with, per route.
 type routeConfigs struct {
-	agent  *tls.Config // control SNI: l8tunnel ALPN only, TLS 1.3
-	tunnel *tls.Config // mode B TCP/SSH: no ALPN, TLS 1.3
-	http   *tls.Config // HTTP tunnels and error pages: h2 + http/1.1
-	reject *tls.Config // fails every handshake with an alert
+	agent       *tls.Config // control SNI: l8tunnel ALPN only, TLS 1.3
+	agentWS     *tls.Config // control SNI over WebSocket: http/1.1, TLS 1.3
+	tunnel      *tls.Config // mode B TCP/SSH: no ALPN, TLS 1.3
+	tunnelToken *tls.Config // mode B with an access token: connect-token ALPN
+	http        *tls.Config // HTTP tunnels and error pages: h2 + http/1.1
+	reject      *tls.Config // fails every handshake with an alert
 }
 
 var errRejected = errors.New("no route for this server name")
@@ -30,9 +32,15 @@ func newRouteConfigs(base *tls.Config) routeConfigs {
 	agent.MinVersion = tls.VersionTLS13
 	agent.NextProtos = []string{protocol.ALPN}
 
+	agentWS := agent.Clone()
+	agentWS.NextProtos = []string{"http/1.1"}
+
 	tunnel := base.Clone()
 	tunnel.MinVersion = tls.VersionTLS13
 	tunnel.NextProtos = nil
+
+	tunnelToken := tunnel.Clone()
+	tunnelToken.NextProtos = []string{protocol.ConnectTokenALPN}
 
 	http := base.Clone()
 	http.MinVersion = tls.VersionTLS12
@@ -41,7 +49,7 @@ func newRouteConfigs(base *tls.Config) routeConfigs {
 	reject := &tls.Config{
 		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { return nil, errRejected },
 	}
-	return routeConfigs{agent: agent, tunnel: tunnel, http: http, reject: reject}
+	return routeConfigs{agent: agent, agentWS: agentWS, tunnel: tunnel, tunnelToken: tunnelToken, http: http, reject: reject}
 }
 
 // tunnelName extracts the tunnel name from <name>.<base-domain>, or
@@ -85,6 +93,9 @@ func (s *Server) serveConn(raw *net.TCPConn) {
 		}
 	}()
 	log := s.log.With("remote", raw.RemoteAddr().String())
+	if !s.admit(raw.RemoteAddr(), nil, log) {
+		return
+	}
 	raw.SetReadDeadline(time.Now().Add(handshakeTimeout))
 
 	hello, conn, err := peekClientHello(raw)
@@ -94,8 +105,16 @@ func (s *Server) serveConn(raw *net.TCPConn) {
 	}
 	sni := strings.ToLower(strings.TrimSuffix(hello.ServerName, "."))
 	if sni == s.cfg.ControlSNI {
+		if !offers(hello.SupportedProtos, protocol.ALPN) && offers(hello.SupportedProtos, "http/1.1") {
+			// An agent using the WebSocket transport.
+			if tconn := s.terminate(conn, s.routes.agentWS, log); tconn != nil {
+				s.wsListener.Push(tconn)
+				handedOff = true
+			}
+			return
+		}
 		if !offers(hello.SupportedProtos, protocol.ALPN) {
-			s.reject(conn, log, "control SNI without the l8tunnel ALPN")
+			s.reject(conn, log, "control SNI without the l8tunnel or http/1.1 ALPN")
 			return
 		}
 		if tconn := s.terminate(conn, s.routes.agent, log); tconn != nil {
@@ -111,9 +130,14 @@ func (s *Server) serveConn(raw *net.TCPConn) {
 	name := s.tunnelName(sni)
 	t, typ, _ := s.registry.lookup(name)
 	switch {
+	case t != nil && !t.access.AllowsIP(remoteIP(raw.RemoteAddr())) && typ != l8tunnel.TunnelType_TUNNEL_TYPE_HTTP:
+		s.counters.rejectedIP.Add(1)
+		s.reject(conn, log, "client IP not allowed by tunnel "+name)
 	case t != nil && typ == l8tunnel.TunnelType_TUNNEL_TYPE_TLS:
 		raw.SetReadDeadline(time.Time{})
 		t.forward(conn, raw.RemoteAddr().String())
+	case t != nil && hasPublicPort(typ) && t.access.RequiresToken():
+		s.serveTokenTunnel(t, hello, conn, log)
 	case t != nil && hasPublicPort(typ):
 		if tconn := s.terminate(conn, s.routes.tunnel, log); tconn != nil {
 			t.forward(tconn, raw.RemoteAddr().String())
@@ -124,6 +148,7 @@ func (s *Server) serveConn(raw *net.TCPConn) {
 			handedOff = true
 		}
 	default:
+		s.counters.rejectedNoRoute.Add(1)
 		s.reject(conn, log, "no tunnel for server name "+sni)
 	}
 }
@@ -168,4 +193,41 @@ func (s *Server) lookupHTTP(name string) (httpproxy.Tunnel, httpproxy.State) {
 func (s *Server) IsTunnelHost(host string) bool {
 	_, _, found := s.registry.lookup(s.tunnelName(strings.ToLower(strings.TrimSuffix(host, "."))))
 	return found
+}
+
+// serveTokenTunnel serves mode B for a tunnel that requires an access
+// token: the client must negotiate the connect-token ALPN and send a
+// ConnectAuth with the right token before any data is forwarded.
+func (s *Server) serveTokenTunnel(t *tunnel, hello *tls.ClientHelloInfo, conn *prefixConn, log *slog.Logger) {
+	ip := remoteIP(conn.RemoteAddr())
+	if s.authFailures.Exhausted(ip) {
+		s.reject(conn, log, "too many failed access tokens from this address")
+		return
+	}
+	if !offers(hello.SupportedProtos, protocol.ConnectTokenALPN) {
+		s.reject(conn, log, "tunnel "+t.endpoint.GetName()+" requires an access token")
+		return
+	}
+	tconn := s.terminate(conn, s.routes.tunnelToken, log)
+	if tconn == nil {
+		return
+	}
+	tconn.SetReadDeadline(time.Now().Add(handshakeTimeout))
+	msg := &l8tunnel.ConnectAuth{}
+	if err := protocol.ReadMessage(tconn, msg); err != nil {
+		log.Debug("no access token from client", "error", err)
+		return
+	}
+	ok := t.access.CheckToken(msg.GetAccessToken())
+	if err := protocol.WriteMessage(tconn, &l8tunnel.ConnectAuthResult{Ok: ok}); err != nil {
+		return
+	}
+	if !ok {
+		s.authFailures.Allow(ip)
+		s.counters.authFailures.Add(1)
+		log.Warn("wrong access token for tunnel", "tunnel", t.endpoint.GetName())
+		return
+	}
+	tconn.SetReadDeadline(time.Time{})
+	t.forward(tconn, conn.RemoteAddr().String())
 }

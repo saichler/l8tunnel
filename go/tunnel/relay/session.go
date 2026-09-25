@@ -1,15 +1,16 @@
 package relay
 
 import (
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 	"github.com/saichler/l8tunnel/go/tunnel/transport"
 	"github.com/saichler/l8tunnel/go/types/l8tunnel"
@@ -21,22 +22,32 @@ const handshakeTimeout = 10 * time.Second
 
 // agentSession is one authenticated agent connection.
 type agentSession struct {
-	server   *Server
-	id       string
-	token    string // name of the token the agent authenticated with
-	agentID  string
-	log      *slog.Logger
-	mux      *transport.Session
-	control  *transport.Stream
-	writeMu  sync.Mutex
-	lastSeen atomic.Int64 // unix nanos of the last control message
-	// tunnels is only touched by the session's control-loop goroutine.
-	tunnels []*tunnel
+	server      *Server
+	id          string
+	remote      string
+	token       *auth.TokenRecord // set by the handshake
+	agentID     string
+	hello       *l8tunnel.Hello
+	connectedAt time.Time
+	log         *slog.Logger
+	mux         *transport.Session
+	control     *transport.Stream
+	writeMu     sync.Mutex
+	lastSeen    atomic.Int64 // unix nanos of the last control message
+	rttMicros   atomic.Int64 // the agent's last reported heartbeat round trip
+	// tunnelsMu guards the handshake fields read by Status and tunnels.
+	tunnelsMu sync.Mutex
+	tunnels   []*tunnel
 }
 
 // serveAgent runs an agent session on a connection that negotiated the
 // l8tunnel ALPN on the control SNI.
-func (s *Server) serveAgent(conn *tls.Conn, log *slog.Logger) {
+func (s *Server) serveAgent(conn net.Conn, log *slog.Logger) {
+	ip := remoteIP(conn.RemoteAddr())
+	if s.authFailures.Exhausted(ip) {
+		log.Warn("refused agent connection: too many failed authentications from this address")
+		return
+	}
 	mux, err := transport.NewServerSession(conn, log)
 	if err != nil {
 		log.Warn("agent session setup failed", "error", err)
@@ -44,7 +55,7 @@ func (s *Server) serveAgent(conn *tls.Conn, log *slog.Logger) {
 	}
 	defer mux.Close()
 
-	sess := &agentSession{server: s, id: protocol.RandomID(8), log: log, mux: mux}
+	sess := &agentSession{server: s, id: protocol.RandomID(8), remote: conn.RemoteAddr().String(), log: log, mux: mux}
 	if !s.track(sess) {
 		return
 	}
@@ -52,9 +63,14 @@ func (s *Server) serveAgent(conn *tls.Conn, log *slog.Logger) {
 	defer sess.closeTunnels()
 
 	if err := sess.handshake(); err != nil {
+		if errors.Is(err, errUnauthorized) {
+			s.authFailures.Allow(ip)
+			s.counters.authFailures.Add(1)
+		}
 		log.Warn("agent rejected", "error", err)
 		return
 	}
+	s.counters.sessionsAccepted.Add(1)
 	sess.lastSeen.Store(time.Now().UnixNano())
 	s.goTracked(sess.watchdog)
 	sess.controlLoop()
@@ -92,19 +108,23 @@ func (sess *agentSession) handshake() error {
 			"relay speaks protocol version %d, agent sent %d", protocol.Version, hello.GetProtocolVersion()))
 		return fmt.Errorf("unsupported protocol version %d", hello.GetProtocolVersion())
 	}
-	tokenName, ok := sess.server.cfg.Tokens.Verify(hello.GetToken())
-	if !ok {
+	rec, err := sess.server.verifyToken(hello.GetToken())
+	if err != nil {
 		sess.send(protocol.ErrorMessage(l8tunnel.ErrorCode_ERROR_CODE_UNAUTHORIZED, "invalid token"))
-		return fmt.Errorf("invalid token from agent %q", hello.GetAgentId())
+		return fmt.Errorf("agent %q: %w", hello.GetAgentId(), err)
 	}
 	if hello.GetAgentId() == "" {
 		sess.send(protocol.ErrorMessage(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST, "agent ID is required"))
 		return fmt.Errorf("hello without agent ID")
 	}
 
-	sess.token = tokenName
+	sess.tunnelsMu.Lock()
+	sess.token = rec
 	sess.agentID = hello.GetAgentId()
-	sess.log = sess.log.With("session", sess.id, "token", tokenName, "agent", sess.agentID)
+	sess.hello = hello
+	sess.connectedAt = time.Now()
+	sess.tunnelsMu.Unlock()
+	sess.log = sess.log.With("session", sess.id, "token", rec.Name, "agent", sess.agentID)
 	sess.log.Info("agent connected", "version", hello.GetAgentVersion(),
 		"os", hello.GetOs(), "arch", hello.GetArch())
 	return sess.send(&l8tunnel.ControlMessage{Body: &l8tunnel.ControlMessage_Welcome{
@@ -130,6 +150,7 @@ func (sess *agentSession) controlLoop() {
 		case *l8tunnel.ControlMessage_Register:
 			reply = sess.register(body.Register)
 		case *l8tunnel.ControlMessage_Ping:
+			sess.rttMicros.Store(body.Ping.GetLastRttUs())
 			reply = &l8tunnel.ControlMessage{Body: &l8tunnel.ControlMessage_Pong{
 				Pong: &l8tunnel.Pong{Nonce: body.Ping.GetNonce(), SentUnixNano: body.Ping.GetSentUnixNano()},
 			}}
@@ -187,8 +208,10 @@ func (sess *agentSession) register(req *l8tunnel.Register) *l8tunnel.ControlMess
 		opened = append(opened, t)
 	}
 	endpoints := make([]*l8tunnel.Endpoint, 0, len(opened))
+	sess.tunnelsMu.Lock()
+	sess.tunnels = append(sess.tunnels, opened...)
+	sess.tunnelsMu.Unlock()
 	for _, t := range opened {
-		sess.tunnels = append(sess.tunnels, t)
 		endpoints = append(endpoints, t.endpoint)
 		if t.listener != nil {
 			sess.server.goTracked(t.serve)
@@ -204,15 +227,38 @@ func (sess *agentSession) register(req *l8tunnel.Register) *l8tunnel.ControlMess
 // closeTunnels stops the session's listeners and parks their reservations
 // for the grace period.
 func (sess *agentSession) closeTunnels() {
-	for _, t := range sess.tunnels {
+	sess.tunnelsMu.Lock()
+	tunnels := sess.tunnels
+	sess.tunnels = nil
+	sess.tunnelsMu.Unlock()
+	for _, t := range tunnels {
 		t.close()
 		sess.server.registry.park(t.res, sess)
 	}
-	sess.tunnels = nil
 }
 
 func (sess *agentSession) send(msg *l8tunnel.ControlMessage) error {
 	sess.writeMu.Lock()
 	defer sess.writeMu.Unlock()
 	return protocol.WriteMessage(sess.control, msg)
+}
+
+var errUnauthorized = errors.New("invalid token")
+
+// verifyToken checks a presented token against the store. Lookup is by the
+// token's ID; the secret is compared with bcrypt.
+func (s *Server) verifyToken(token string) (*auth.TokenRecord, error) {
+	id, secret, err := auth.ParseToken(token)
+	if err != nil {
+		return nil, errUnauthorized
+	}
+	rec, err := s.cfg.Tokens.TokenByID(id)
+	if err != nil {
+		// A store failure is not the agent's fault; don't count it.
+		return nil, fmt.Errorf("look up token: %w", err)
+	}
+	if rec == nil || !rec.Verify(secret) {
+		return nil, errUnauthorized
+	}
+	return rec, nil
 }

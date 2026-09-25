@@ -9,9 +9,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/saichler/l8tunnel/go/tunnel/auth"
+	"github.com/saichler/l8tunnel/go/tunnel/transport"
 )
 
 // State is the lookup result for a tunnel name.
@@ -33,6 +37,8 @@ type Tunnel interface {
 	ID() string
 	// OpenStream opens a byte stream to the tunnel's local service.
 	OpenStream(ctx context.Context, clientAddr string) (net.Conn, error)
+	// Access is the tunnel's access policy (IP lists, basic auth).
+	Access() *auth.Access
 }
 
 // LookupFunc resolves a tunnel name. The Tunnel is nil unless the state is
@@ -46,15 +52,17 @@ type Config struct {
 	// ForwardedHeaders adds X-Forwarded-For/-Host/-Proto to proxied
 	// requests. Incoming X-Forwarded-* headers are always dropped.
 	ForwardedHeaders bool
-	Lookup           LookupFunc
-	Logger           *slog.Logger
+	// AccessLog logs one line per request.
+	AccessLog bool
+	Lookup    LookupFunc
+	Logger    *slog.Logger
 }
 
 // Proxy is an HTTP/1.1 and HTTP/2 server for terminated tunnel traffic.
 type Proxy struct {
 	cfg      Config
 	log      *slog.Logger
-	listener *connListener
+	listener *transport.ConnListener
 	server   *http.Server
 	done     chan struct{}
 
@@ -73,12 +81,16 @@ func New(cfg Config) *Proxy {
 	p := &Proxy{
 		cfg:      cfg,
 		log:      cfg.Logger,
-		listener: newConnListener(),
+		listener: transport.NewConnListener(),
 		proxies:  map[string]*tunnelProxy{},
 		done:     make(chan struct{}),
 	}
+	var handler http.Handler = p
+	if cfg.AccessLog {
+		handler = p.logRequests(p)
+	}
 	p.server = &http.Server{
-		Handler:           p,
+		Handler:           handler,
 		ReadHeaderTimeout: 30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		ErrorLog:          slog.NewLogLogger(cfg.Logger.Handler(), slog.LevelDebug),
@@ -94,7 +106,7 @@ func New(cfg Config) *Proxy {
 // ServeConn serves HTTP on a TLS connection whose handshake is done. The
 // proxy owns the connection from here on.
 func (p *Proxy) ServeConn(conn net.Conn) {
-	p.listener.push(conn)
+	p.listener.Push(conn)
 }
 
 // Forget drops the cached connections of a tunnel that closed.
@@ -131,12 +143,36 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	tun, state := p.cfg.Lookup(name)
 	switch state {
 	case StateActive:
+		if !authorize(w, r, tun.Access()) {
+			return
+		}
 		p.proxyFor(tun).proxy.ServeHTTP(w, r)
 	case StateOffline:
 		writeError(w, http.StatusBadGateway, errAgentOffline, r.Host)
 	default:
 		writeError(w, http.StatusNotFound, errUnknownTunnel, r.Host)
 	}
+}
+
+// authorize applies a tunnel's access policy, writing the 403/401 page
+// when the request isn't allowed. Credentials the relay checked are
+// removed so they don't reach (or confuse) the service.
+func authorize(w http.ResponseWriter, r *http.Request, access *auth.Access) bool {
+	ap, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil || !access.AllowsIP(ap.Addr()) {
+		writeError(w, http.StatusForbidden, errIPDenied, r.Host)
+		return false
+	}
+	if access.RequiresBasic() {
+		user, password, ok := r.BasicAuth()
+		if !ok || !access.CheckBasic(user, password) {
+			w.Header().Set("WWW-Authenticate", `Basic realm="l8tunnel", charset="UTF-8"`)
+			writeError(w, http.StatusUnauthorized, errUnauthorized, r.Host)
+			return false
+		}
+		r.Header.Del("Authorization")
+	}
+	return true
 }
 
 // tunnelName returns the tunnel name of <name>.<base-domain>[:port], or ""

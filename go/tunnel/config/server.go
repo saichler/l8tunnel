@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/saichler/l8tunnel/go/tunnel/auth"
+	"github.com/saichler/l8tunnel/go/tunnel/admin"
 	"github.com/saichler/l8tunnel/go/tunnel/certs"
+	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 	"github.com/saichler/l8tunnel/go/tunnel/relay"
+	"github.com/saichler/l8tunnel/go/tunnel/store"
 )
 
 const (
@@ -53,8 +56,29 @@ type ServerFile struct {
 	} `yaml:"tls"`
 	// ACME obtains certificates from an ACME CA such as Let's Encrypt.
 	ACME *ACMEFile `yaml:"acme"`
-	// TokensFile has one "<name> <token>" pair per line.
-	TokensFile string `yaml:"tokens_file"`
+	// Storage is the directory for the database (tokens, reservations)
+	// and, by default, ACME state; empty means /var/lib/l8tunnel.
+	Storage string `yaml:"storage"`
+	Admin   struct {
+		// Socket is the admin API's Unix socket; empty means
+		// /run/l8tunnel/admin.sock.
+		Socket string `yaml:"socket"`
+	} `yaml:"admin"`
+	Log LogFile `yaml:"log"`
+	// AccessLog logs every request of HTTP tunnels (method, host, path,
+	// status, bytes, duration, client).
+	AccessLog bool `yaml:"access_log"`
+	// Metrics serves Prometheus metrics over plain HTTP.
+	Metrics struct {
+		// Listen is an address such as 127.0.0.1:9100; empty disables it.
+		Listen string `yaml:"listen"`
+	} `yaml:"metrics"`
+	// RateLimits are per client IP; zero values mean the relay defaults.
+	RateLimits struct {
+		ConnectionsPerSecond  float64 `yaml:"connections_per_second"`
+		ConnectionsBurst      int     `yaml:"connections_burst"`
+		AuthFailuresPerMinute int     `yaml:"auth_failures_per_minute"`
+	} `yaml:"rate_limits"`
 	// HeartbeatInterval and NameGracePeriod are durations such as "15s";
 	// empty means the relay defaults (15s and 5m).
 	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
@@ -73,7 +97,7 @@ type ACMEFile struct {
 	// for private ACME CAs; empty means system roots.
 	CARoot string `yaml:"ca_root"`
 	// Storage keeps ACME accounts and certificates; empty means
-	// /var/lib/l8tunnel/acme.
+	// <storage>/acme.
 	Storage     string `yaml:"storage"`
 	DNSProvider string `yaml:"dns_provider"`
 	// DNSCredentials values may be written as ${ENV_VAR}.
@@ -89,13 +113,53 @@ func LoadServerFile(path string) (*ServerFile, error) {
 	return f, nil
 }
 
-// NewRelay builds the relay: its certificates (obtaining ACME
-// certificates first), tokens and settings. ACME renewal runs until ctx
-// ends.
-func (f *ServerFile) NewRelay(ctx context.Context, logger *slog.Logger) (*relay.Server, error) {
+// DefaultStorage is the relay's state directory.
+const DefaultStorage = "/var/lib/l8tunnel"
+
+// StorageDir is the relay's state directory.
+func (f *ServerFile) StorageDir() string {
+	if f.Storage == "" {
+		return DefaultStorage
+	}
+	return f.Storage
+}
+
+// DatabasePath is the relay's database file.
+func (f *ServerFile) DatabasePath() string {
+	return filepath.Join(f.StorageDir(), "l8tunnel.db")
+}
+
+// AdminSocket is the admin API's Unix socket.
+func (f *ServerFile) AdminSocket() string {
+	if f.Admin.Socket == "" {
+		return admin.DefaultServerSocket
+	}
+	return f.Admin.Socket
+}
+
+// NewRelay builds the relay on an open store: its certificates (obtaining
+// ACME certificates first), tokens, reservations and settings. ACME
+// renewal runs until ctx ends.
+func (f *ServerFile) NewRelay(ctx context.Context, logger *slog.Logger, st *store.Store, version string) (*relay.Server, error) {
 	cfg, mgr, err := f.RelayConfig(ctx, logger)
 	if err != nil {
 		return nil, err
+	}
+	cfg.Version = version
+	cfg.Tokens = st
+	reservations, err := st.Reservations()
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range reservations {
+		cfg.Reservations = append(cfg.Reservations, relay.PermanentReservation{Name: r.Name, TokenID: r.TokenID, Port: r.Port})
+	}
+	tokens, err := st.Tokens()
+	if err != nil {
+		return nil, err
+	}
+	if len(tokens) == 0 {
+		logger.Warn("no agent tokens yet; create one with: l8tunnel-server token create --name <name>")
 	}
 	srv, err := relay.New(cfg)
 	if err != nil {
@@ -105,8 +169,8 @@ func (f *ServerFile) NewRelay(ctx context.Context, logger *slog.Logger) (*relay.
 	return srv, nil
 }
 
-// RelayConfig builds the relay configuration and its certificate manager.
-// relay.New validates the configuration further.
+// RelayConfig builds the relay configuration (without its token store)
+// and its certificate manager. relay.New validates it further.
 func (f *ServerFile) RelayConfig(ctx context.Context, logger *slog.Logger) (relay.Config, *certs.Manager, error) {
 	cfg, err := f.relayConfig(logger)
 	if err != nil {
@@ -157,7 +221,7 @@ func (f *ServerFile) certsConfig(cfg relay.Config, logger *slog.Logger) (certs.C
 		CA:             f.ACME.CA,
 		CARootFile:     f.ACME.CARoot,
 		HTTPListenAddr: cfg.HTTPAddr,
-		Storage:        f.ACME.Storage,
+		Storage:        f.acmeStorage(),
 		DNSProvider:    f.ACME.DNSProvider,
 		DNSCredentials: creds,
 		BaseDomain:     base,
@@ -168,15 +232,11 @@ func (f *ServerFile) certsConfig(cfg relay.Config, logger *slog.Logger) (certs.C
 
 // relayConfig builds everything except certificates.
 func (f *ServerFile) relayConfig(logger *slog.Logger) (relay.Config, error) {
-	tokens, err := auth.LoadTokensFile(f.TokensFile)
-	if err != nil {
-		return relay.Config{}, fmt.Errorf("tokens_file: %w", err)
-	}
 	portRange := f.TCPPortRange
 	if portRange == "" {
 		portRange = defaultTCPPortRange
 	}
-	portMin, portMax, err := relay.ParsePortRange(portRange)
+	portMin, portMax, err := protocol.ParsePortRange(portRange)
 	if err != nil {
 		return relay.Config{}, fmt.Errorf("tcp_port_range: %w", err)
 	}
@@ -196,15 +256,28 @@ func (f *ServerFile) relayConfig(logger *slog.Logger) (relay.Config, error) {
 		HTTPAddr:                httpListen,
 		PublicHTTPSPort:         f.PublicHTTPSPort,
 		DisableForwardedHeaders: f.ForwardedHeaders != nil && !*f.ForwardedHeaders,
+		AccessLog:               f.AccessLog,
 		BaseDomain:              f.BaseDomain,
 		ControlSNI:              f.ControlSNI,
-		Tokens:                  tokens,
-		PublicHost:              f.PublicHost,
-		BindHost:                f.Bind,
-		TCPPortMin:              portMin,
-		TCPPortMax:              portMax,
-		HeartbeatInterval:       f.HeartbeatInterval,
-		NameGracePeriod:         f.NameGracePeriod,
-		Logger:                  logger,
+		RateLimits: relay.RateLimits{
+			ConnectionsPerSecond:  f.RateLimits.ConnectionsPerSecond,
+			ConnectionsBurst:      f.RateLimits.ConnectionsBurst,
+			AuthFailuresPerMinute: f.RateLimits.AuthFailuresPerMinute,
+		},
+		PublicHost:        f.PublicHost,
+		BindHost:          f.Bind,
+		TCPPortMin:        portMin,
+		TCPPortMax:        portMax,
+		HeartbeatInterval: f.HeartbeatInterval,
+		NameGracePeriod:   f.NameGracePeriod,
+		Logger:            logger,
 	}, nil
+}
+
+// acmeStorage is the ACME state directory: acme.storage, or <storage>/acme.
+func (f *ServerFile) acmeStorage() string {
+	if f.ACME.Storage != "" {
+		return f.ACME.Storage
+	}
+	return filepath.Join(f.StorageDir(), "acme")
 }

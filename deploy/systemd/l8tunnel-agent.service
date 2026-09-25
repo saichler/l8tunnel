@@ -29,6 +29,8 @@ RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 ReadOnlyPaths=/etc/l8tunnel
+# status_socket: /run/l8tunnel-agent/status.sock
+RuntimeDirectory=l8tunnel-agent
 
 [Install]
 WantedBy=multi-user.target

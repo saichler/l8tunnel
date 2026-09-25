@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
@@ -21,10 +22,14 @@ type Agent struct {
 
 	mu        sync.Mutex
 	endpoints []*l8tunnel.Endpoint
-	targets   map[string]TunnelConfig // tunnel ID -> tunnel
-	names     []string                // name per configured tunnel, once assigned
+	targets   map[string]int // tunnel ID -> index in cfg.Tunnels
+	names     []string       // name per configured tunnel, once assigned
 	ready     chan struct{}
 	readyOnce sync.Once
+
+	stats   []tunnelStats // per configured tunnel
+	state   connState
+	lastRTT atomic.Int64 // last heartbeat round trip, nanoseconds
 }
 
 // New validates cfg and returns an agent that isn't connected yet.
@@ -47,9 +52,10 @@ func New(cfg Config) (*Agent, error) {
 	return &Agent{
 		cfg:     cfg,
 		log:     log,
-		targets: map[string]TunnelConfig{},
+		targets: map[string]int{},
 		names:   names,
 		ready:   make(chan struct{}),
+		stats:   make([]tunnelStats, len(cfg.Tunnels)),
 	}, nil
 }
 
@@ -77,6 +83,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	delay := a.cfg.ReconnectMin
 	for {
 		registered, err := a.runSession(ctx)
+		a.setDisconnected(err)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -124,12 +131,14 @@ func (a *Agent) setEndpoints(endpoints []*l8tunnel.Endpoint) error {
 	}
 	a.mu.Lock()
 	a.endpoints = endpoints
-	a.targets = map[string]TunnelConfig{}
+	a.targets = map[string]int{}
 	for i, ep := range endpoints {
-		a.targets[ep.GetTunnelId()] = a.cfg.Tunnels[i]
+		a.targets[ep.GetTunnelId()] = i
 		a.names[i] = ep.GetName()
 		a.logEndpoint(ep, a.cfg.Tunnels[i].targetString())
 	}
+	a.state.connected = true
+	a.state.since = time.Now()
 	a.mu.Unlock()
 	a.readyOnce.Do(func() { close(a.ready) })
 	return nil
@@ -151,9 +160,12 @@ func (a *Agent) requestedName(i int) string {
 	return a.names[i]
 }
 
-func (a *Agent) tunnelFor(tunnelID string) (TunnelConfig, bool) {
+func (a *Agent) tunnelFor(tunnelID string) (TunnelConfig, *tunnelStats, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	t, ok := a.targets[tunnelID]
-	return t, ok
+	i, ok := a.targets[tunnelID]
+	if !ok {
+		return TunnelConfig{}, nil, false
+	}
+	return a.cfg.Tunnels[i], &a.stats[i], true
 }

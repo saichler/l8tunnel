@@ -1,11 +1,13 @@
 package tests
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"net"
+	"net/http"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -75,7 +77,7 @@ func TestFailedRegistrationRollsBackAllTunnels(t *testing.T) {
 	startAgent(t, env, agent.TunnelConfig{Name: "good", Type: tcpType, Target: startEchoServer(t)})
 }
 
-func TestNonAgentALPNRejected(t *testing.T) {
+func TestControlSNIServesOnlyAgents(t *testing.T) {
 	env := startRelay(t, 1)
 	pem, err := os.ReadFile(env.pki.caFile)
 	if err != nil {
@@ -83,16 +85,28 @@ func TestNonAgentALPNRejected(t *testing.T) {
 	}
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(pem)
-	conn, err := tls.Dial("tcp", env.addr, &tls.Config{
-		ServerName: controlSNI, RootCAs: pool, NextProtos: []string{"http/1.1"},
-	})
-	if err != nil {
-		return // handshake refused: no shared application protocol
+
+	// Neither the l8tunnel ALPN nor http/1.1: the handshake is refused.
+	if conn, err := tls.Dial("tcp", env.addr, &tls.Config{ServerName: controlSNI, RootCAs: pool, NextProtos: []string{"h2"}}); err == nil {
+		conn.Close()
+		t.Fatal("control SNI accepted an h2-only client")
 	}
-	defer conn.Close()
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if n, err := conn.Read(make([]byte, 1)); err == nil {
-		t.Fatalf("relay kept a non-agent connection open (read %d bytes)", n)
+	// http/1.1 is the WebSocket transport's entry point; any other path
+	// is a 404.
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{ServerName: controlSNI, RootCAs: pool, NextProtos: []string{"http/1.1"}},
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "tcp", env.addr)
+		},
+	}}
+	resp, err := client.Get("https://" + controlSNI + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET / on the control SNI: %d, want 404", resp.StatusCode)
 	}
 }
 
@@ -135,7 +149,7 @@ func TestAgentConfigFailsFast(t *testing.T) {
 			t.Errorf("%s: agent.New accepted an invalid config", name)
 		}
 	}
-	if _, err := agent.ParseTunnelType("udp"); err == nil {
+	if _, err := protocol.ParseTunnelType("udp"); err == nil {
 		t.Error("ParseTunnelType accepted udp")
 	}
 }
@@ -146,10 +160,7 @@ func TestRelayConfigFailsFast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tokens, err := auth.NewTokens(map[string]string{"t": testToken})
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := newTestStore(t, auth.Policy{})
 	good := relay.Config{ControlAddr: ":0", TLS: tlsCfg, Tokens: tokens, BaseDomain: baseDomain, TCPPortMin: 1000, TCPPortMax: 1001}
 	if _, err := relay.New(good); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
@@ -175,23 +186,26 @@ func TestRelayConfigFailsFast(t *testing.T) {
 	if _, err := transport.ServerTLSConfig("", ""); err == nil {
 		t.Error("ServerTLSConfig accepted missing files")
 	}
-	if _, err := auth.NewTokens(map[string]string{"short": "abc"}); err == nil {
-		t.Error("NewTokens accepted a short token")
-	}
-	if _, err := auth.NewTokens(nil); err == nil {
-		t.Error("NewTokens accepted an empty token set")
-	}
-	bad := filepath.Join(t.TempDir(), "tokens")
-	os.WriteFile(bad, []byte("only-one-field\n"), 0o600)
-	if _, err := auth.LoadTokensFile(bad); err == nil {
-		t.Error("LoadTokensFile accepted a malformed line")
+	for name, c := range map[string]struct {
+		name, token string
+		policy      auth.Policy
+	}{
+		"malformed token": {"t", "test-token-0123456789", auth.Policy{}},
+		"bad token name":  {"has space", testToken, auth.Policy{}},
+		"bad pattern":     {"t", testToken, auth.Policy{Names: []string{"["}}},
+		"bad type":        {"t", testToken, auth.Policy{Types: []string{"udp"}}},
+		"bad ports":       {"t", testToken, auth.Policy{Ports: "5-1"}},
+	} {
+		if _, err := auth.NewTokenRecord(c.name, c.token, c.policy, 4); err == nil {
+			t.Errorf("%s: NewTokenRecord accepted it", name)
+		}
 	}
 	for _, r := range []string{"", "abc", "0-10", "10-5", "1-70000"} {
-		if _, _, err := relay.ParsePortRange(r); err == nil {
+		if _, _, err := protocol.ParsePortRange(r); err == nil {
 			t.Errorf("ParsePortRange accepted %q", r)
 		}
 	}
-	if lo, hi, err := relay.ParsePortRange("22000-22999"); err != nil || lo != 22000 || hi != 22999 {
+	if lo, hi, err := protocol.ParsePortRange("22000-22999"); err != nil || lo != 22000 || hi != 22999 {
 		t.Errorf("ParsePortRange(22000-22999) = %d, %d, %v", lo, hi, err)
 	}
 }

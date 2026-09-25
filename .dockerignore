@@ -1,0 +1,5 @@
+.git
+go/vendor
+dist
+plans
+**/*.log

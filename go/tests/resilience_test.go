@@ -56,7 +56,7 @@ func rawSession(t *testing.T, env *relayEnv) (*transport.Session, *transport.Str
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn, err := transport.DialRelay(t.Context(), env.addr, tlsCfg)
+	conn, err := transport.DialRelay(t.Context(), env.addr, tlsCfg, transport.DialOptions{Proxy: transport.ProxyNone})
 	if err != nil {
 		t.Fatal(err)
 	}

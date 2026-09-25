@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,7 +22,38 @@ const (
 	// missedHeartbeats is how many intervals may pass without a Ping before
 	// the relay drops the session.
 	missedHeartbeats = 3
+
+	// Default per-IP rate limits.
+	DefaultConnectionsPerSecond  = 20
+	DefaultConnectionsBurst      = 100
+	DefaultAuthFailuresPerMinute = 5
 )
+
+// TokenStore looks up agent tokens by ID; it returns nil (and no error)
+// for an unknown ID. store.Store implements it.
+type TokenStore interface {
+	TokenByID(id string) (*auth.TokenRecord, error)
+}
+
+// PermanentReservation binds a tunnel name (and, for tcp/ssh, a public
+// port) to a token until an operator removes it.
+type PermanentReservation struct {
+	Name    string
+	TokenID string
+	Port    int
+}
+
+// RateLimits are per client IP.
+type RateLimits struct {
+	// ConnectionsPerSecond and ConnectionsBurst limit new connections to
+	// the TLS listener and tunnel ports; zero means the defaults.
+	ConnectionsPerSecond float64
+	ConnectionsBurst     int
+	// AuthFailuresPerMinute is how many failed agent authentications an
+	// IP may make before its agent connections are refused until the
+	// budget refills; zero means the default.
+	AuthFailuresPerMinute int
+}
 
 // Config configures a relay Server.
 type Config struct {
@@ -43,6 +73,10 @@ type Config struct {
 	// DisableForwardedHeaders stops the relay adding X-Forwarded-For,
 	// -Host and -Proto to HTTP tunnel requests.
 	DisableForwardedHeaders bool
+	// AccessLog logs every HTTP tunnel request.
+	AccessLog bool
+	// Version is reported in logs and metrics.
+	Version string
 	// TLS is the relay's server TLS config (see transport.ServerTLSConfig).
 	// Its certificates must cover ControlSNI and *.BaseDomain.
 	TLS *tls.Config
@@ -52,8 +86,12 @@ type Config struct {
 	// ControlSNI is the server name agents connect with; empty means
 	// "connect." + BaseDomain.
 	ControlSNI string
-	// Tokens are the agent tokens the relay accepts.
-	Tokens *auth.Tokens
+	// Tokens looks up the agent tokens the relay accepts.
+	Tokens TokenStore
+	// Reservations are loaded at start; more can be added with Reserve.
+	Reservations []PermanentReservation
+	// RateLimits are per client IP.
+	RateLimits RateLimits
 	// PublicHost is the host name reported in mode A public addresses;
 	// empty means BaseDomain.
 	PublicHost string
@@ -112,28 +150,20 @@ func (c *Config) validate() error {
 	if c.TCPPortMin < 1 || c.TCPPortMax > 65535 || c.TCPPortMin > c.TCPPortMax {
 		return fmt.Errorf("relay: invalid TCP port range %d-%d", c.TCPPortMin, c.TCPPortMax)
 	}
+	if c.RateLimits.ConnectionsPerSecond < 0 || c.RateLimits.ConnectionsBurst < 0 || c.RateLimits.AuthFailuresPerMinute < 0 {
+		return fmt.Errorf("relay: rate limits must not be negative")
+	}
+	if c.RateLimits.ConnectionsPerSecond == 0 {
+		c.RateLimits.ConnectionsPerSecond = DefaultConnectionsPerSecond
+	}
+	if c.RateLimits.ConnectionsBurst == 0 {
+		c.RateLimits.ConnectionsBurst = DefaultConnectionsBurst
+	}
+	if c.RateLimits.AuthFailuresPerMinute == 0 {
+		c.RateLimits.AuthFailuresPerMinute = DefaultAuthFailuresPerMinute
+	}
 	if c.Logger == nil {
 		c.Logger = slog.Default()
 	}
 	return nil
-}
-
-// ParsePortRange parses "min-max" (or a single port) into its bounds.
-func ParsePortRange(s string) (int, int, error) {
-	lo, hi, found := strings.Cut(s, "-")
-	if !found {
-		hi = lo
-	}
-	first, err := strconv.Atoi(strings.TrimSpace(lo))
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid port range %q: %w", s, err)
-	}
-	last, err := strconv.Atoi(strings.TrimSpace(hi))
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid port range %q: %w", s, err)
-	}
-	if first < 1 || last > 65535 || first > last {
-		return 0, 0, fmt.Errorf("invalid port range %q", s)
-	}
-	return first, last, nil
 }

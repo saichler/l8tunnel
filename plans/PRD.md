@@ -97,7 +97,7 @@ Nothing has to open on the private network. The agent only makes outbound connec
 | C-4 | The agent sends a `Register` message listing the tunnels it wants: type (http, tls, tcp/ssh), requested name, local target and options. The relay replies with the assigned public endpoints or errors (name taken, not authorized). |
 | C-5 | Heartbeats every 15s (configurable on the relay, sent to the agent in `Welcome`). The agent sends `Ping`, the relay answers `Pong`. Either side drops the session after 3 missed intervals; the relay then parks the session's tunnels (see C-6). |
 | C-6 | Reconnect with exponential backoff (1s → 60s cap, ±20% jitter), reset after every session that registered. Relay-assigned names are requested again on reconnect. A disconnected session's names and ports are held for the same token for a grace period (default 5 min), so URLs and ports stay stable across reconnects. An agent reconnecting with the same agent ID takes over its previous session's tunnels even if the relay hasn't detected that session as dead yet. Errors returned by the relay (bad token, name taken, invalid request) are not retried: the agent exits with the error. |
-| C-7 | **WebSocket transport:** for networks that only allow HTTP proxies, the agent can carry the control session over WebSocket (`wss://`) and honor `HTTPS_PROXY`. The transport is chosen explicitly in config (`transport: tls \| wss`). The agent never switches transports silently: if the configured transport fails, it logs the error and keeps retrying that transport. |
+| C-7 | **WebSocket transport:** for networks that only allow HTTP(S), the agent can carry the control session over WebSocket (`transport: wss`): TLS to the control SNI with ALPN `http/1.1`, then an upgrade on `/l8tunnel/ws`, carrying the same multiplexed session. The transport is chosen explicitly in config; the agent never switches silently. Both transports, and `l8tunnel connect`, go through HTTP CONNECT proxies: an explicit `proxy: http://user:pass@host:port`, `none`, or by default `HTTPS_PROXY`/`NO_PROXY` (loopback addresses are never proxied through the environment). A proxy refusal is reported with its status, without leaking credentials. |
 | C-8 | The protocol is versioned. The relay rejects incompatible agent versions with a clear error. |
 
 ### 7.2 HTTPS tunnels
@@ -110,7 +110,7 @@ Nothing has to open on the private network. The agent only makes outbound connec
 | H-4 | WebSockets, HTTP/2 (to the client), server-sent events, long polling and large uploads/downloads (streaming, no full buffering) are supported. |
 | H-5 | The relay adds `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` headers (`forwarded_headers`, default on). Incoming `X-Forwarded-*` headers from clients are always dropped, so they can't be spoofed. |
 | H-6 | **Custom domains:** a user can map `app.mydomain.com` (a CNAME to the relay) to a tunnel. The relay gets a certificate for it through HTTP-01 or TLS-ALPN-01. |
-| H-7 | **Access control per tunnel** (termination mode): none, HTTP basic auth, OIDC/OAuth2 (Google/GitHub/generic), IP allowlist/denylist. |
+| H-7 | **Access control per tunnel**, declared in the agent's tunnel config and enforced by the relay: IP `allow_ips`/`deny_ips` (addresses or CIDRs, deny wins; every tunnel type, both modes; HTTP gets a 403 page, other types are refused) and HTTP `basic_auth` users with bcrypt hashes (`l8tunnel hash-password`; `$2a$`/`$2b$`/`$2y$` accepted). Verified credentials skip bcrypt for 5 minutes (digest cache), and the `Authorization` header is removed before the request reaches the service. OIDC is v1.1. |
 | H-8 | Port 80 (`listen.http`, `off` disables it) redirects to HTTPS with 308, except ACME HTTP-01 challenge paths. |
 | H-9 | A friendly HTML error page (plus an `X-L8tunnel-Error` header) when a tunnel exists but the agent is offline (502 `agent-offline`), the service behind the agent doesn't answer (502 `upstream-error`), or the name is unknown (404 `tunnel-not-found`). Clients other than `l8tunnel connect` get the page for any `<name>.<base-domain>`. In `acme.mode: http01` an unreserved name has no certificate, so the handshake fails instead. |
 
@@ -130,7 +130,7 @@ SSH carries no hostname (no SNI or Host header), so routing needs a different ap
 | S-2 | **Mode B:** the relay accepts TLS on :443 with SNI `<name>.<base-domain>`. For tunnels of type `tcp`/`ssh`, it terminates the outer TLS and forwards the plain inner byte stream (the SSH protocol) to the agent. `l8tunnel connect` offers the ALPN `l8tunnel-connect/1`; for a name with no active tunnel, or the control SNI without the l8tunnel ALPN, its handshake fails, so it gets an error instead of an empty connection or an HTML page. The name `connect` (the control SNI's label) can't be used as a tunnel name. |
 | S-3 | `l8tunnel connect <host>` opens TLS to the relay with the given SNI and pipes stdin/stdout, so it works as an OpenSSH `ProxyCommand`. |
 | S-4 | The relay never sees SSH credentials or plaintext, because SSH encrypts end to end. The relay only carries bytes. |
-| S-5 | Optional IP allowlist per SSH tunnel. Optional "tunnel access token" required by `l8tunnel connect` in mode B, as a second factor at the relay layer. |
+| S-5 | IP allow/deny lists per tunnel (mode A and B). Optional `access_token` per TCP/SSH tunnel: only its SHA-256 goes to the relay; mode B clients must present it (`l8tunnel connect --access-token`, negotiated through the `l8tunnel-connect-token/1` ALPN and acknowledged by the relay, so a wrong token is an explicit error). A tunnel with an access token gets no mode A port, since raw TCP can't carry the token. Failed tokens count against the per-IP auth-failure limit. |
 | S-6 | Generic raw TCP (for example RDP, VNC, databases) uses the same mechanism as SSH. SSH is just a TCP tunnel with a default local port of 22. |
 
 ### 7.4 Agent configuration and CLI
@@ -145,19 +145,23 @@ l8tunnel-agent --config /etc/l8tunnel/agent.yaml
 
 Config file (`/etc/l8tunnel/agent.yaml`):
 ```yaml
-relay: tunnel.example.com:443
+relay: connect.tunnel.example.com:443
 token: ${L8TUNNEL_TOKEN}
+status_socket: /run/l8tunnel-agent/status.sock
 tunnels:
   - name: myapp
     type: http            # http | tls (passthrough) | tcp | ssh
-    target: 127.0.0.1:8080
-    auth:
-      basic: { user: admin, password_hash: "$2y$..." }
+    target: 127.0.0.1:8080   # or https://host:port (+ insecure_skip_verify)
+    basic_auth:
+      - { user: admin, password_hash: "$2y$..." }   # l8tunnel hash-password
   - name: homebox
     type: ssh
     target: 127.0.0.1:22
     public_port: 22001    # mode A; mode B is always available through SNI
     allow_ips: ["203.0.113.0/24"]
+  - name: backup
+    type: ssh
+    access_token: ${BACKUP_TOKEN}   # mode B only: l8tunnel connect --access-token
 ```
 
 | ID | Requirement |
@@ -166,55 +170,57 @@ tunnels:
 | A-2 | Runs as a systemd service. Ships unit files for the agent and the server (`deploy/systemd/`, the server binds :443 through `CAP_NET_BIND_SERVICE`, not root) and example configs (`deploy/examples/`), which a test keeps parseable. |
 | A-3 | Prints the assigned public URL or port at startup and logs connect/disconnect events. |
 | A-4 | Target can be any reachable host:port, not only localhost, so a single agent can expose multiple LAN hosts. |
-| A-5 | Local status endpoint/command (`l8tunnel-agent status`) showing tunnels, connection state and byte counts. |
+| A-5 | `status_socket` (Unix socket, mode 0600) serves `l8tunnel-agent status [--socket] [--json]`: connection state, last error, reconnect count, and per-tunnel target, public address, connections and bytes. |
 
 ### 7.5 Server configuration and administration
 
 ```yaml
-# /etc/l8tunnel/server.yaml
+# /etc/l8tunnel/server.yaml (full example: deploy/examples/server.yaml)
 base_domain: tunnel.example.com
-control_sni: connect.tunnel.example.com
+control_sni: connect.tunnel.example.com   # default: connect.<base_domain>
 listen:
   https: ":443"
-  http: ":80"
+  http: ":80"                             # "off" disables it
 tcp_port_range: "22000-22999"
-acme:
+acme:                                     # or tls: {cert, key}
+  mode: dns01                             # or http01
   email: admin@example.com
-  dns_provider: cloudflare        # for the wildcard cert (DNS-01)
-  dns_credentials_env: CF_API_TOKEN
-storage: /var/lib/l8tunnel        # tokens, reservations, certs (SQLite/BoltDB)
+  dns_provider: cloudflare
+  dns_credentials: {api_token: ${CF_API_TOKEN}}
+storage: /var/lib/l8tunnel                # l8tunnel.db (tokens, reservations) and acme/
 admin:
   socket: /run/l8tunnel/admin.sock
+rate_limits: {connections_per_second: 20, connections_burst: 100, auth_failures_per_minute: 5}
 ```
 
 | ID | Requirement |
 |---|---|
 | V-1 | Certificates come from exactly one of `tls` (static files) or `acme`. `acme.mode: dns01` gets a wildcard `*.base_domain` through a DNS provider API (pluggable through libdns; `cloudflare` first). `acme.mode: http01` gets the control host's certificate at startup and each tunnel host's on its first connection, but only for reserved tunnel names, so strangers can't make the relay order certificates for arbitrary names. Certificates needed at startup are obtained synchronously. Every misconfiguration (missing email, unknown provider, missing or misspelled credential, http01 without a fixed `listen.http` port, unreadable `ca_root`) stops the server before any network access and names the setting. Certificates are stored (`acme.storage`) and renewed automatically. `acme.ca` and `acme.ca_root` allow a private ACME CA. |
-| V-2 | Token management: `l8tunnel-server token create --name laptop --allow-names "myapp,homebox" --allow-tcp`, `token list`, `token revoke`. Revoking a token disconnects its sessions immediately. |
-| V-3 | Name policies per token: allowed name patterns, max tunnels, allowed tunnel types, allowed TCP ports. |
-| V-4 | Name reservation: persistent names bound to a token. |
-| V-5 | `l8tunnel-server status`: active agents (remote IP, version, uptime), tunnels, connection counts, bytes in/out. |
-| V-6 | Persistent state in an embedded DB (no external dependencies). |
+| V-2 | Token management through the admin socket: `l8tunnel-server token create --name laptop [--names ...] [--types ...] [--max-tunnels N] [--ports A-B]` (the token, `l8t_<id>_<secret>`, is printed once), `token list` (never secrets), `token revoke NAME`. Revoking deletes the token and its reservations and disconnects its sessions immediately; the agent then exits with UNAUTHORIZED instead of retrying. |
+| V-3 | Policies per token, enforced at registration with ERROR_CODE_FORBIDDEN: allowed name patterns (`path.Match`, relay-assigned names included), allowed tunnel types, maximum connected tunnels (parked ones don't count), and an allowed tcp/ssh port range that narrows allocation. |
+| V-4 | Permanent reservations: `l8tunnel-server reservation add --name N --token T [--port P]`, `list`, `remove`. A reserved name (and port) belongs to that token indefinitely, survives relay restarts, and is never released by the grace period. |
+| V-5 | `l8tunnel-server status [--json]`: connected agents (token, agent ID, remote address, version, OS/arch, uptime), their tunnels (public address, active/total connections, bytes in/out), and parked names (grace expiry or reserved). |
+| V-6 | Tokens and reservations live in an embedded bbolt database (`<storage>/l8tunnel.db`, pure Go, no external service). A second relay on the same database fails at once with a clear lock error. The admin API is HTTP on a Unix socket (`admin.socket`, mode 0600, stale sockets replaced, over-long paths rejected with a clear error). |
 
 ### 7.6 Observability
 
 | ID | Requirement |
 |---|---|
-| O-1 | Structured logs (JSON or text): agent sessions, tunnel registrations, public connections (with source IP, tunnel and duration), auth failures. |
-| O-2 | Prometheus `/metrics` on an admin listener: active sessions, tunnels, connections, bytes, latency to agent, errors. |
-| O-3 | Optional HTTP access log per tunnel (termination mode). |
+| O-1 | Structured logs (`log: {format: text\|json, level: debug\|info\|warn\|error}`, agent flags `--log-format`/`--log-level`): agent sessions, tunnel registrations, auth failures, and one line per public connection with client address, tunnel, duration and bytes. |
+| O-2 | Prometheus metrics on `metrics.listen` (plain HTTP, text format, no client library): build info, connected agents, agent sessions total, per-agent heartbeat RTT (reported by the agent in each Ping), tunnels by type, parked names, per-tunnel active/total connections and bytes in/out, auth failures, and connections rejected by reason (rate_limit, ip_denied, no_route). |
+| O-3 | Optional HTTP access log (`access_log: true`, relay-wide rather than per tunnel): host, method, path, protocol, status, bytes, duration, client, user agent and the relay's error reason, one line per request. |
 | O-4 | Optional (v1.1): request inspection/replay for HTTP tunnels, like ngrok's inspector, exposed on the agent's local UI. |
 
 ## 8. Non-functional requirements
 
 | Area | Requirement |
 |---|---|
-| **Security** | TLS 1.3 only on the control channel. Tokens stored hashed (argon2/bcrypt) on the server. Constant-time comparisons. Rate limits on auth attempts and new connections per IP. The relay drops privileges after binding to :80/:443 (or uses `CAP_NET_BIND_SERVICE`). No tunnel is reachable before auth completes. Agent-side allowlist of targets, so a compromised relay can't make the agent dial arbitrary internal hosts. |
+| **Security** | TLS 1.3 only on the control channel. Agent tokens are `l8t_<id>_<secret>`, looked up by ID with only a bcrypt hash of the secret stored. Per-IP rate limits on new connections (token bucket) and on failed agent/access-token authentications (an IP over its budget is refused until it refills). The relay binds :80/:443 through `CAP_NET_BIND_SERVICE` under systemd, not root. No tunnel is reachable before auth completes. The agent dials only its own configured targets: the relay only ever names a tunnel ID. |
 | **Performance** | Adds at most 5 ms of latency in the relay (excluding network RTT). At least 500 Mbps aggregate throughput on a 2 vCPU VM. At least 1,000 concurrent public connections and at least 100 agents per relay. |
 | **Reliability** | The agent survives relay restarts and network changes (Wi-Fi ↔ LTE). Reconnect and re-registration finish in under 5s once the network is back. The relay shuts down gracefully and drains connections. |
 | **Resource use** | Idle agent under 20 MB RSS and near-zero CPU. |
 | **Portability** | The agent runs on Linux (amd64, arm64, armv7 for Raspberry Pi), macOS and Windows. The server runs on Linux. |
-| **Distribution** | Static Go binaries, a Docker image and a systemd unit. Installation must not require root beyond binding ports. |
+| **Distribution** | Static Go binaries (`build.sh`: Linux amd64/arm64/armv7, macOS amd64/arm64, Windows amd64/arm64; the relay is Linux only), multi-stage Docker images (`--target server` / `--target agent`, distroless, non-root, about 30 MB), and systemd units. Installation must not require root beyond binding ports. |
 | **Backpressure** | Per-stream flow control, so one slow client can't stall other streams on the same agent session. |
 | **Fail fast** | Invalid or incomplete config makes the binary exit non-zero with a message naming the problem. A tunnel whose access policy can't be loaded is rejected at registration and never exposed without it. No silent degraded modes (see §13.2). |
 

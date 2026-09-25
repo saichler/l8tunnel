@@ -9,7 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/httpproxy"
+	"github.com/saichler/l8tunnel/go/tunnel/transport"
 )
 
 // Server is the relay. Its shared TLS listener carries agent sessions
@@ -23,6 +25,13 @@ type Server struct {
 	registry *registry
 	routes   routeConfigs
 	http     *httpproxy.Proxy
+
+	counters     counters
+	connLimit    *auth.IPLimiter // new connections per IP
+	authFailures *auth.IPLimiter // failed agent/access-token authentications per IP
+
+	wsServer   *http.Server
+	wsListener *transport.ConnListener
 
 	mu         sync.Mutex
 	listener   net.Listener
@@ -39,16 +48,27 @@ func New(cfg Config) (*Server, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	rl := cfg.RateLimits
 	s := &Server{
-		cfg:      cfg,
-		log:      cfg.Logger,
-		registry: newRegistry(cfg.NameGracePeriod),
-		routes:   newRouteConfigs(cfg.TLS),
-		sessions: map[*agentSession]struct{}{},
+		cfg:          cfg,
+		log:          cfg.Logger,
+		registry:     newRegistry(cfg.NameGracePeriod),
+		routes:       newRouteConfigs(cfg.TLS),
+		sessions:     map[*agentSession]struct{}{},
+		connLimit:    auth.NewIPLimiter(rl.ConnectionsPerSecond, rl.ConnectionsBurst),
+		authFailures: auth.NewIPLimiter(float64(rl.AuthFailuresPerMinute)/60, rl.AuthFailuresPerMinute),
 	}
+	for _, r := range cfg.Reservations {
+		if err := s.Reserve(r.Name, r.TokenID, r.Port); err != nil {
+			return nil, fmt.Errorf("relay: reservation %q: %w", r.Name, err)
+		}
+	}
+	s.wsServer, s.wsListener = s.newWebSocketServer()
+	go s.wsServer.Serve(s.wsListener) // returns when Close closes the listener
 	s.http = httpproxy.New(httpproxy.Config{
 		BaseDomain:       cfg.BaseDomain,
 		ForwardedHeaders: !cfg.DisableForwardedHeaders,
+		AccessLog:        cfg.AccessLog,
 		Lookup:           s.lookupHTTP,
 		Logger:           cfg.Logger,
 	})
@@ -95,7 +115,7 @@ func (s *Server) Start() error {
 	}
 
 	s.listener = ln
-	s.log.Info("relay listening", "tls", ln.Addr().String(), "http", s.httpAddr,
+	s.log.Info("relay listening", "version", s.cfg.Version, "tls", ln.Addr().String(), "http", s.httpAddr,
 		"control_sni", s.cfg.ControlSNI, "base_domain", s.cfg.BaseDomain,
 		"public_https_port", s.httpsPort, "tcp_ports", fmt.Sprintf("%d-%d", s.cfg.TCPPortMin, s.cfg.TCPPortMax))
 	s.wg.Add(1)
@@ -148,6 +168,7 @@ func (s *Server) Close() error {
 		sess.mux.Close()
 	}
 	s.mu.Unlock()
+	s.wsServer.Close()
 	s.http.Close()
 	s.wg.Wait()
 	s.registry.close()

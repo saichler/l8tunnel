@@ -20,6 +20,10 @@ const (
 	// name with no active tunnel, the relay fails the handshake for these
 	// clients instead of serving its HTTP error page.
 	ConnectALPN = "l8tunnel-connect/1"
+	// ConnectTokenALPN is also offered by "l8tunnel connect" when it has an
+	// access token. The relay selects it only for tunnels that require
+	// one; the client then sends a ConnectAuth message before any data.
+	ConnectTokenALPN = "l8tunnel-connect-token/1"
 )
 
 // RandomID returns a random hex string of 2*nbytes characters.

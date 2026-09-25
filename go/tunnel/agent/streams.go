@@ -26,7 +26,7 @@ func (a *Agent) serveStream(ctx context.Context, stream *transport.Stream) {
 		return
 	}
 	log := a.log.With("client", open.GetClientAddr())
-	t, ok := a.tunnelFor(open.GetTunnelId())
+	t, stats, ok := a.tunnelFor(open.GetTunnelId())
 	if !ok {
 		log.Warn("stream for unknown tunnel", "tunnel_id", open.GetTunnelId())
 		stream.Close()
@@ -38,7 +38,12 @@ func (a *Agent) serveStream(ctx context.Context, stream *transport.Stream) {
 		stream.Close()
 		return
 	}
+	stats.active.Add(1)
+	stats.total.Add(1)
 	res := pipe.Join(stream, conn)
+	stats.active.Add(-1)
+	stats.bytesIn.Add(res.AtoB)
+	stats.bytesOut.Add(res.BtoA)
 	log.Debug("stream closed", "target", t.targetString(), "bytes_in", res.AtoB, "bytes_out", res.BtoA, "error", res.Err)
 }
 

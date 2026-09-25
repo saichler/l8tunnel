@@ -4,11 +4,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/saichler/l8tunnel/go/tunnel/agent"
+	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/config"
 	"github.com/saichler/l8tunnel/go/tunnel/relay"
 	"github.com/saichler/l8tunnel/go/types/l8tunnel"
@@ -98,7 +100,7 @@ func TestAgentCommandLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := config.TunnelFile{Name: "db", Type: "tcp", Target: "127.0.0.1:5432", PublicPort: 25432}
-	if f.Relay != "r:443" || f.Token != "tok" || len(f.Tunnels) != 1 || f.Tunnels[0] != want {
+	if f.Relay != "r:443" || f.Token != "tok" || len(f.Tunnels) != 1 || !reflect.DeepEqual(f.Tunnels[0], want) {
 		t.Fatalf("got %+v", f)
 	}
 
@@ -134,7 +136,6 @@ func TestAgentCommandLine(t *testing.T) {
 
 func TestServerYAMLConfig(t *testing.T) {
 	pki := newPKI(t)
-	tokens := writeFile(t, "tokens", "test "+testToken+"\n")
 	path := writeFile(t, "server.yaml", `
 base_domain: tunnel.test
 listen:
@@ -144,7 +145,6 @@ tcp_port_range: "30000-30010"
 tls:
   cert: `+pki.certFile+`
   key: `+pki.keyFile+`
-tokens_file: `+tokens+`
 heartbeat_interval: 150ms
 name_grace_period: 2m
 `)
@@ -160,8 +160,8 @@ name_grace_period: 2m
 		cfg.TCPPortMin != 30000 || cfg.TCPPortMax != 30010 {
 		t.Fatalf("unexpected relay config %+v", cfg)
 	}
-	if _, err := relay.New(cfg); err != nil {
-		t.Fatalf("relay.New rejected the YAML config: %v", err)
+	if _, err := f.NewRelay(t.Context(), testLogger(), newTestStore(t, auth.Policy{}), "test"); err != nil {
+		t.Fatalf("NewRelay rejected the YAML config: %v", err)
 	}
 
 	for name, content := range map[string]string{
@@ -177,7 +177,7 @@ name_grace_period: 2m
 		t.Fatal(err)
 	}
 	if _, _, err := f.RelayConfig(t.Context(), testLogger()); err == nil {
-		t.Error("RelayConfig accepted a config without TLS files or tokens")
+		t.Error("RelayConfig accepted a config without certificates")
 	}
 }
 
@@ -188,6 +188,7 @@ func TestDeployExamplesParse(t *testing.T) {
 		t.Error(err)
 	}
 	t.Setenv(config.TokenEnv, testToken)
+	t.Setenv("BACKUP_ACCESS_TOKEN", "example")
 	f, err := config.LoadAgentFile(filepath.Join(examples, "agent.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +228,7 @@ tunnels:
 		{Name: "pt", Type: l8tunnel.TunnelType_TUNNEL_TYPE_TLS, Target: "10.0.0.8:443"},
 	}
 	for i, w := range want {
-		if cfg.Tunnels[i] != w {
+		if !reflect.DeepEqual(cfg.Tunnels[i], w) {
 			t.Errorf("tunnel %d = %+v, want %+v", i, cfg.Tunnels[i], w)
 		}
 	}
@@ -267,8 +268,7 @@ tunnels:
 
 func TestServerHTTPOptions(t *testing.T) {
 	pki := newPKI(t)
-	tokens := writeFile(t, "tokens", "test "+testToken+"\n")
-	base := "base_domain: tunnel.test\ntls: {cert: " + pki.certFile + ", key: " + pki.keyFile + "}\ntokens_file: " + tokens + "\n"
+	base := "base_domain: tunnel.test\ntls: {cert: " + pki.certFile + ", key: " + pki.keyFile + "}\n"
 
 	cfg := relayConfigFromYAML(t, base)
 	if cfg.HTTPAddr != ":80" || cfg.DisableForwardedHeaders || cfg.PublicHTTPSPort != 0 {
@@ -297,8 +297,7 @@ func relayConfigFromYAML(t *testing.T, content string) relay.Config {
 // network, naming the setting at fault.
 func TestCertificateConfigFailsFast(t *testing.T) {
 	pki := newPKI(t)
-	tokens := writeFile(t, "tokens", "test "+testToken+"\n")
-	base := "base_domain: tunnel.test\ntokens_file: " + tokens + "\n"
+	base := "base_domain: tunnel.test\n"
 	static := "tls: {cert: " + pki.certFile + ", key: " + pki.keyFile + "}\n"
 	cases := map[string]struct{ yaml, want string }{
 		"neither":         {"", "either tls"},
@@ -324,5 +323,94 @@ func TestCertificateConfigFailsFast(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: got error %v, want one mentioning %q", name, err, c.want)
 		}
+	}
+}
+
+func TestAgentAccessConfig(t *testing.T) {
+	t.Setenv("VAULT_TOKEN", "sesame")
+	h, err := auth.HashPassword("pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := config.LoadAgentFile(writeFile(t, "agent.yaml", `
+relay: connect.tunnel.test:443
+token: `+testToken+`
+status_socket: /run/l8tunnel-agent/status.sock
+tunnels:
+  - name: admin
+    type: http
+    target: 8080
+    allow_ips: [203.0.113.0/24, 198.51.100.7]
+    deny_ips: [203.0.113.66]
+    basic_auth:
+      - {user: alice, password_hash: "`+h+`"}
+  - name: vault
+    type: ssh
+    access_token: ${VAULT_TOKEN}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.StatusSocket != "/run/l8tunnel-agent/status.sock" {
+		t.Fatalf("status socket %q", f.StatusSocket)
+	}
+	cfg, err := f.AgentConfig(testLogger(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, vault := cfg.Tunnels[0], cfg.Tunnels[1]
+	if len(admin.AllowIPs) != 2 || admin.DenyIPs[0] != "203.0.113.66" || admin.BasicUsers[0].Username != "alice" {
+		t.Fatalf("admin tunnel %+v", admin)
+	}
+	if vault.AccessToken != "sesame" {
+		t.Fatalf("vault access token %q", vault.AccessToken)
+	}
+	if _, err := agent.New(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	cli, err := config.ParseAgentArgs([]string{"--relay", "r:443", "--status-socket", "/tmp/s.sock", "http", "8080",
+		"--allow-ip", "10.0.0.0/8", "--allow-ip", "192.168.1.5", "--deny-ip", "10.0.0.9", "--basic-auth", "bob:" + h}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tun := cli.Tunnels[0]
+	if cli.StatusSocket != "/tmp/s.sock" || len(tun.AllowIPs) != 2 || tun.DenyIPs[0] != "10.0.0.9" ||
+		tun.BasicAuth[0].User != "bob" || tun.BasicAuth[0].PasswordHash != h {
+		t.Fatalf("CLI access flags: %+v", cli)
+	}
+	if _, err := config.ParseAgentArgs([]string{"--relay", "r:443", "http", "8080", "--basic-auth", "no-colon"}, io.Discard); err == nil {
+		t.Fatal("--basic-auth without user:hash accepted")
+	}
+}
+
+func TestServerStorageAdminAndRateLimits(t *testing.T) {
+	pki := newPKI(t)
+	base := "base_domain: tunnel.test\ntls: {cert: " + pki.certFile + ", key: " + pki.keyFile + "}\n"
+	f, err := config.LoadServerFile(writeFile(t, "server.yaml", base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.DatabasePath() != "/var/lib/l8tunnel/l8tunnel.db" || f.AdminSocket() != "/run/l8tunnel/admin.sock" {
+		t.Fatalf("defaults: %s %s", f.DatabasePath(), f.AdminSocket())
+	}
+	f, err = config.LoadServerFile(writeFile(t, "server.yaml", base+`
+storage: /srv/l8
+admin: {socket: /tmp/l8.sock}
+rate_limits: {connections_per_second: 5, connections_burst: 10, auth_failures_per_minute: 3}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := f.RelayConfig(t.Context(), testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.DatabasePath() != "/srv/l8/l8tunnel.db" || f.AdminSocket() != "/tmp/l8.sock" ||
+		cfg.RateLimits.ConnectionsPerSecond != 5 || cfg.RateLimits.ConnectionsBurst != 10 || cfg.RateLimits.AuthFailuresPerMinute != 3 {
+		t.Fatalf("overrides: %s %s %+v", f.DatabasePath(), f.AdminSocket(), cfg.RateLimits)
+	}
+	if _, err := config.LoadServerFile(writeFile(t, "server.yaml", base+"tokens_file: /etc/tokens\n")); err == nil {
+		t.Fatal("the removed tokens_file option was accepted silently")
 	}
 }

@@ -23,6 +23,8 @@ var (
 	errAgentOffline  = pageError{"agent-offline", "Tunnel offline", "The tunnel's agent is disconnected. It may be reconnecting; try again shortly."}
 	errUpstream      = pageError{"upstream-error", "Service unreachable", "The tunnel's agent is connected, but the service behind it didn't answer."}
 	errMisdirected   = pageError{"misdirected", "Misdirected request", "The Host header doesn't match the TLS server name of this connection."}
+	errIPDenied      = pageError{"ip-denied", "Forbidden", "This tunnel doesn't accept connections from your address."}
+	errUnauthorized  = pageError{"unauthorized", "Authentication required", "This tunnel requires a username and password."}
 )
 
 var pageTemplate = template.Must(template.New("page").Parse(`<!DOCTYPE html>

@@ -2,16 +2,9 @@ package tests
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
-	"math/big"
 	mrand "math/rand"
 	"net"
 	"os"
@@ -22,12 +15,15 @@ import (
 	"github.com/saichler/l8tunnel/go/tunnel/agent"
 	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/relay"
+	"github.com/saichler/l8tunnel/go/tunnel/store"
 	"github.com/saichler/l8tunnel/go/tunnel/transport"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
-	testToken  = "test-token-0123456789abcdef"
-	otherToken = "other-token-0123456789abcdef"
+	// Well-formed agent tokens (l8t_<id>_<secret>) stored by the harness.
+	testToken  = "l8t_7e570001_testtesttesttesttesttesttesttesttesttesttes"
+	otherToken = "l8t_07e40002_otherotherotherotherotherotherotherotheroth"
 	baseDomain = "tunnel.test"
 	controlSNI = "connect.tunnel.test"
 )
@@ -40,81 +36,6 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// testPKI is a throwaway CA and a relay certificate for *.tunnel.test.
-type testPKI struct {
-	caFile, certFile, keyFile string
-}
-
-func newPKI(t *testing.T) *testPKI {
-	t.Helper()
-	dir := t.TempDir()
-	caKey := mustKey(t)
-	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "l8tunnel test CA"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	caCert, err := x509.ParseCertificate(caDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	leafKey := mustKey(t)
-	leafTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: controlSNI},
-		DNSNames:     []string{controlSNI, "*." + baseDomain},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyDER, err := x509.MarshalECPrivateKey(leafKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	p := &testPKI{
-		caFile:   filepath.Join(dir, "ca.pem"),
-		certFile: filepath.Join(dir, "relay.pem"),
-		keyFile:  filepath.Join(dir, "relay-key.pem"),
-	}
-	writePEM(t, p.caFile, "CERTIFICATE", caDER)
-	writePEM(t, p.certFile, "CERTIFICATE", leafDER)
-	writePEM(t, p.keyFile, "EC PRIVATE KEY", keyDER)
-	return p
-}
-
-func mustKey(t *testing.T) *ecdsa.PrivateKey {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return key
-}
-
-func writePEM(t *testing.T, path, blockType string, der []byte) {
-	t.Helper()
-	data := pem.EncodeToMemory(&pem.Block{Type: blockType, Bytes: der})
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // relayOpts configures startRelayWith. Zero values pick fresh ports, a
 // new PKI and the relay's default timings.
 type relayOpts struct {
@@ -124,16 +45,22 @@ type relayOpts struct {
 	pki              *testPKI
 	heartbeat        time.Duration
 	grace            time.Duration
-	httpListener     bool // also listen for plain HTTP on 127.0.0.1
-	noForwarded      bool // disable X-Forwarded-* headers
+	httpListener     bool              // also listen for plain HTTP on 127.0.0.1
+	noForwarded      bool              // disable X-Forwarded-* headers
+	testPolicy       auth.Policy       // policy of the "test" token
+	rateLimits       *relay.RateLimits // nil: limits high enough not to matter
+	accessLog        bool
+	logger           *slog.Logger // nil: testLogger()
+	store            *store.Store // reused across restarts
 }
 
 // relayEnv is a running relay on 127.0.0.1.
 type relayEnv struct {
-	srv  *relay.Server
-	opts relayOpts
-	pki  *testPKI
-	addr string
+	srv   *relay.Server
+	opts  relayOpts
+	pki   *testPKI
+	store *store.Store
+	addr  string
 
 	portMin, portMax int
 }
@@ -159,14 +86,24 @@ func startRelayWith(t *testing.T, opts relayOpts) *relayEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tokensFile := filepath.Join(t.TempDir(), "tokens")
-	lines := "# test tokens\ntest " + testToken + "\nother " + otherToken + "\n"
-	if err := os.WriteFile(tokensFile, []byte(lines), 0o600); err != nil {
-		t.Fatal(err)
+	if opts.store == nil {
+		opts.store = newTestStore(t, opts.testPolicy)
 	}
-	tokens, err := auth.LoadTokensFile(tokensFile)
+	limits := relay.RateLimits{ConnectionsPerSecond: 10000, ConnectionsBurst: 10000, AuthFailuresPerMinute: 10000}
+	if opts.rateLimits != nil {
+		limits = *opts.rateLimits
+	}
+	var reservations []relay.PermanentReservation
+	stored, err := opts.store.Reservations()
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, r := range stored {
+		reservations = append(reservations, relay.PermanentReservation{Name: r.Name, TokenID: r.TokenID, Port: r.Port})
+	}
+	logger := opts.logger
+	if logger == nil {
+		logger = testLogger()
 	}
 	httpAddr := ""
 	if opts.httpListener {
@@ -178,13 +115,16 @@ func startRelayWith(t *testing.T, opts relayOpts) *relayEnv {
 		DisableForwardedHeaders: opts.noForwarded,
 		TLS:                     tlsCfg,
 		BaseDomain:              baseDomain,
-		Tokens:                  tokens,
+		Tokens:                  opts.store,
+		Reservations:            reservations,
+		RateLimits:              limits,
+		AccessLog:               opts.accessLog,
 		BindHost:                "127.0.0.1",
 		TCPPortMin:              opts.portMin,
 		TCPPortMax:              opts.portMax,
 		HeartbeatInterval:       opts.heartbeat,
 		NameGracePeriod:         opts.grace,
-		Logger:                  testLogger(),
+		Logger:                  logger,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -193,8 +133,33 @@ func startRelayWith(t *testing.T, opts relayOpts) *relayEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { srv.Close() })
-	return &relayEnv{srv: srv, opts: opts, pki: opts.pki, addr: srv.Addr().String(),
+	return &relayEnv{srv: srv, opts: opts, pki: opts.pki, store: opts.store, addr: srv.Addr().String(),
 		portMin: opts.portMin, portMax: opts.portMax}
+}
+
+// newTestStore opens a store holding the "test" and "other" tokens,
+// hashed with bcrypt's minimum cost to keep the tests fast.
+func newTestStore(t *testing.T, testPolicy auth.Policy) *store.Store {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "l8tunnel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	for name, tok := range map[string]string{"test": testToken, "other": otherToken} {
+		policy := auth.Policy{}
+		if name == "test" {
+			policy = testPolicy
+		}
+		rec, err := auth.NewTokenRecord(name, tok, policy, bcrypt.MinCost)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.AddToken(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return st
 }
 
 // restart closes the relay and starts a new one on the same control
@@ -247,21 +212,30 @@ func newAgent(t *testing.T, env *relayEnv, token string, tunnels ...agent.Tunnel
 // newAgentWithID is newAgent with a fixed agent ID ("" generates one).
 func newAgentWithID(t *testing.T, env *relayEnv, token, agentID string, tunnels ...agent.TunnelConfig) *agent.Agent {
 	t.Helper()
+	return newAgentWith(t, env, func(c *agent.Config) {
+		c.Token, c.AgentID, c.Tunnels = token, agentID, tunnels
+	})
+}
+
+// newAgentWith builds a test agent for env; edit adjusts the config.
+func newAgentWith(t *testing.T, env *relayEnv, edit func(*agent.Config)) *agent.Agent {
+	t.Helper()
 	tlsCfg, err := transport.ClientTLSConfig(controlSNI, env.pki.caFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := agent.New(agent.Config{
+	cfg := agent.Config{
 		RelayAddr:    env.addr,
 		TLS:          tlsCfg,
-		Token:        token,
-		AgentID:      agentID,
+		Token:        testToken,
 		Version:      "test",
-		Tunnels:      tunnels,
+		Proxy:        transport.ProxyNone,
 		ReconnectMin: 50 * time.Millisecond,
 		ReconnectMax: 200 * time.Millisecond,
 		Logger:       testLogger(),
-	})
+	}
+	edit(&cfg)
+	a, err := agent.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

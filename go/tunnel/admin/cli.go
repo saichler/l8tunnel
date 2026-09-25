@@ -1,0 +1,278 @@
+package admin
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/saichler/l8tunnel/go/tunnel/auth"
+)
+
+// ServerUsage describes the relay's admin commands.
+const ServerUsage = `usage: l8tunnel-server [--config server.yaml] <command>
+
+commands:
+  status [--json]                        connected agents, tunnels and parked names
+  token create --name N [policy flags]   create an agent token (printed once)
+      --names p1,p2    allowed tunnel names (patterns like dev-*)
+      --types t1,t2    allowed tunnel types (tcp, ssh, http, tls)
+      --max-tunnels N  maximum connected tunnels
+      --ports A-B      allowed tcp/ssh public ports
+  token list                             list tokens (never their secrets)
+  token revoke NAME                      delete a token and disconnect its agents
+  reservation add --name N --token T [--port P]
+                                         bind a tunnel name (and port) to a token
+  reservation list
+  reservation remove NAME
+
+Run as root or the relay's user: the admin socket is mode 0600.
+`
+
+// RunServerCommand runs a relay admin command against the socket.
+func RunServerCommand(socket string, args []string, stdout, stderr io.Writer) error {
+	c := NewClient(socket)
+	if len(args) == 0 {
+		fmt.Fprint(stderr, ServerUsage)
+		return fmt.Errorf("missing command")
+	}
+	switch strings.Join(args[:min(2, len(args))], " ") {
+	case "token create":
+		return tokenCreate(c, args[2:], stdout, stderr)
+	case "token list":
+		return tokenList(c, stdout)
+	case "token revoke":
+		if len(args) != 3 {
+			return fmt.Errorf("usage: token revoke NAME")
+		}
+		resp, err := c.RevokeToken(args[2])
+		if err == nil {
+			fmt.Fprintf(stdout, "revoked token %q; disconnected %d agent session(s)\n", args[2], resp.Disconnected)
+		}
+		return err
+	case "reservation add":
+		return reservationAdd(c, args[2:], stdout, stderr)
+	case "reservation list":
+		return reservationList(c, stdout)
+	case "reservation remove":
+		if len(args) != 3 {
+			return fmt.Errorf("usage: reservation remove NAME")
+		}
+		if err := c.Unreserve(args[2]); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "removed reservation %q\n", args[2])
+		return nil
+	}
+	if args[0] == "status" {
+		return relayStatus(c, args[1:], stdout, stderr)
+	}
+	fmt.Fprint(stderr, ServerUsage)
+	return fmt.Errorf("unknown command %q", strings.Join(args, " "))
+}
+
+func splitList(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, ",")
+}
+
+func tokenCreate(c *Client, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("token create", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	name := fs.String("name", "", "token name")
+	names := fs.String("names", "", "allowed tunnel names, comma separated")
+	types := fs.String("types", "", "allowed tunnel types, comma separated")
+	maxTunnels := fs.Int("max-tunnels", 0, "maximum connected tunnels")
+	ports := fs.String("ports", "", "allowed tcp/ssh public ports, A-B")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *name == "" || fs.NArg() > 0 {
+		return fmt.Errorf("usage: token create --name N [--names ...] [--types ...] [--max-tunnels N] [--ports A-B]")
+	}
+	resp, err := c.CreateToken(CreateTokenRequest{Name: *name, Policy: auth.Policy{
+		Names: splitList(*names), Types: splitList(*types), MaxTunnels: *maxTunnels, Ports: *ports,
+	}})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "created token %q (id %s). It is shown only once:\n\n  %s\n\n", resp.Name, resp.ID, resp.Token)
+	return nil
+}
+
+func policyString(p auth.Policy) string {
+	var parts []string
+	if len(p.Names) > 0 {
+		parts = append(parts, "names="+strings.Join(p.Names, ","))
+	}
+	if len(p.Types) > 0 {
+		parts = append(parts, "types="+strings.Join(p.Types, ","))
+	}
+	if p.MaxTunnels > 0 {
+		parts = append(parts, fmt.Sprintf("max-tunnels=%d", p.MaxTunnels))
+	}
+	if p.Ports != "" {
+		parts = append(parts, "ports="+p.Ports)
+	}
+	if len(parts) == 0 {
+		return "any"
+	}
+	return strings.Join(parts, " ")
+}
+
+func tokenList(c *Client, stdout io.Writer) error {
+	tokens, err := c.Tokens()
+	if err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "NAME\tID\tCREATED\tPOLICY")
+	for _, t := range tokens {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", t.Name, t.ID, t.Created.Format(time.RFC3339), policyString(t.Policy))
+	}
+	return tw.Flush()
+}
+
+func reservationAdd(c *Client, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("reservation add", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	name := fs.String("name", "", "tunnel name")
+	token := fs.String("token", "", "token name")
+	port := fs.Int("port", 0, "tcp/ssh public port")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *name == "" || *token == "" || fs.NArg() > 0 {
+		return fmt.Errorf("usage: reservation add --name N --token T [--port P]")
+	}
+	res, err := c.Reserve(ReservationRequest{Name: *name, Token: *token, Port: *port})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "reserved %q for token %q", res.Name, res.Token)
+	if res.Port != 0 {
+		fmt.Fprintf(stdout, " on port %d", res.Port)
+	}
+	fmt.Fprintln(stdout)
+	return nil
+}
+
+func reservationList(c *Client, stdout io.Writer) error {
+	list, err := c.Reservations()
+	if err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "NAME\tTOKEN\tPORT\tCREATED")
+	for _, r := range list {
+		port := "-"
+		if r.Port != 0 {
+			port = fmt.Sprint(r.Port)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.Name, r.Token, port, r.Created.Format(time.RFC3339))
+	}
+	return tw.Flush()
+}
+
+func relayStatus(c *Client, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	asJSON := fs.Bool("json", false, "print JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	st, err := c.RelayStatus()
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(st)
+	}
+	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(tw, "AGENTS (%d)\n", len(st.Sessions))
+	fmt.Fprintln(tw, "TOKEN\tAGENT\tREMOTE\tVERSION\tUPTIME")
+	for _, s := range st.Sessions {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s %s/%s\t%s\n", s.Token, s.AgentID, s.Remote, s.Version, s.OS, s.Arch,
+			time.Since(s.ConnectedAt).Round(time.Second))
+	}
+	fmt.Fprintln(tw, "\nTUNNELS")
+	fmt.Fprintln(tw, "NAME\tTYPE\tTOKEN\tPUBLIC\tCONNS (ACTIVE/TOTAL)\tIN\tOUT")
+	for _, s := range st.Sessions {
+		for _, t := range s.Tunnels {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d/%d\t%s\t%s\n", t.Name, t.Type, s.Token, t.PublicAddress,
+				t.ActiveConns, t.TotalConns, bytesString(t.BytesIn), bytesString(t.BytesOut))
+		}
+	}
+	if len(st.Parked) > 0 {
+		fmt.Fprintln(tw, "\nPARKED (no agent connected)")
+		fmt.Fprintln(tw, "NAME\tTYPE\tPORT\tHELD UNTIL")
+		for _, p := range st.Parked {
+			until := "reserved"
+			if !p.Permanent {
+				until = p.Expires.Format(time.RFC3339)
+			}
+			port := "-"
+			if p.Port != 0 {
+				port = fmt.Sprint(p.Port)
+			}
+			typ := p.Type
+			if typ == "" {
+				typ = "-"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", p.Name, typ, port, until)
+		}
+	}
+	return tw.Flush()
+}
+
+// RunAgentStatus prints an agent's status from its status socket.
+func RunAgentStatus(socket string, asJSON bool, stdout io.Writer) error {
+	st, err := NewClient(socket).AgentStatus()
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(st)
+	}
+	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	state := "disconnected"
+	if st.Connected {
+		state = "connected for " + time.Since(st.ConnectedSince).Round(time.Second).String()
+	}
+	fmt.Fprintf(tw, "agent %s -> %s: %s (reconnects: %d)\n", st.AgentID, st.Relay, state, st.Reconnects)
+	if st.LastError != "" {
+		fmt.Fprintf(tw, "last error: %s\n", st.LastError)
+	}
+	fmt.Fprintln(tw, "\nNAME\tTYPE\tTARGET\tPUBLIC\tCONNS (ACTIVE/TOTAL)\tIN\tOUT")
+	for _, t := range st.Tunnels {
+		public := t.PublicAddress
+		if public == "" {
+			public = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d/%d\t%s\t%s\n", t.Name, t.Type, t.Target, public,
+			t.ActiveConns, t.TotalConns, bytesString(t.BytesIn), bytesString(t.BytesOut))
+	}
+	return tw.Flush()
+}
+
+func bytesString(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}

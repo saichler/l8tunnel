@@ -29,7 +29,9 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
+# Database and ACME state in /var/lib/l8tunnel; admin socket in /run/l8tunnel.
 StateDirectory=l8tunnel
+RuntimeDirectory=l8tunnel
 ReadOnlyPaths=/etc/l8tunnel
 LimitNOFILE=65536
 

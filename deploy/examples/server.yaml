@@ -36,9 +36,26 @@ tls:
 #   # storage: /var/lib/l8tunnel/acme      # accounts and certificates
 #   # ca: https://acme-staging-v02.api.letsencrypt.org/directory   # for testing
 
-# One "<name> <token>" per line. Generate a token with:
-#   openssl rand -hex 24
-tokens_file: /etc/l8tunnel/tokens
+# Tokens and permanent reservations live in <storage>/l8tunnel.db; manage
+# them on the running relay (as root or the l8tunnel user):
+#   l8tunnel-server token create --name laptop [--names 'dev-*'] [--types http,ssh]
+#   l8tunnel-server reservation add --name homebox --token laptop --port 22001
+#   l8tunnel-server status
+# storage: /var/lib/l8tunnel
+# admin:
+#   socket: /run/l8tunnel/admin.sock
+
+# log:
+#   format: text                     # or json
+#   level: info                      # debug, info, warn, error
+# access_log: false                  # one line per HTTP tunnel request
+# metrics:
+#   listen: 127.0.0.1:9100           # Prometheus metrics; empty disables
+
+# rate_limits:                       # per client IP
+#   connections_per_second: 20
+#   connections_burst: 100
+#   auth_failures_per_minute: 5      # bad agent/access tokens before refusing
 
 # heartbeat_interval: 15s   # agents ping this often; dropped after 3 misses
 # name_grace_period: 5m     # names/ports stay reserved for the token after a disconnect

@@ -36,7 +36,7 @@ func (e *sessionEnd) set(err error) {
 // runSession connects, registers the tunnels and serves them until the
 // session ends. registered reports whether registration succeeded.
 func (a *Agent) runSession(ctx context.Context) (registered bool, err error) {
-	conn, err := transport.DialRelay(ctx, a.cfg.RelayAddr, a.cfg.TLS)
+	conn, err := a.dial(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -91,6 +91,15 @@ func (a *Agent) runSession(ctx context.Context) (registered bool, err error) {
 	return true, end.err
 }
 
+// dial connects to the relay with the configured transport and proxy.
+func (a *Agent) dial(ctx context.Context) (net.Conn, error) {
+	opts := transport.DialOptions{Proxy: a.cfg.Proxy}
+	if a.cfg.Transport == transport.TransportWebSocket {
+		return transport.DialRelayWebSocket(ctx, a.cfg.RelayAddr, a.cfg.TLS, opts)
+	}
+	return transport.DialRelay(ctx, a.cfg.RelayAddr, a.cfg.TLS, opts)
+}
+
 // handshake sends Hello and Register, waits for Welcome and Registered,
 // and returns the heartbeat interval the relay asked for.
 func (a *Agent) handshake(control *transport.Stream) (time.Duration, error) {
@@ -120,7 +129,9 @@ func (a *Agent) handshake(control *transport.Stream) (time.Duration, error) {
 
 	specs := make([]*l8tunnel.TunnelSpec, 0, len(a.cfg.Tunnels))
 	for i, t := range a.cfg.Tunnels {
-		specs = append(specs, &l8tunnel.TunnelSpec{Name: a.requestedName(i), Type: t.Type, PublicPort: t.PublicPort})
+		specs = append(specs, &l8tunnel.TunnelSpec{
+			Name: a.requestedName(i), Type: t.Type, PublicPort: t.PublicPort, Access: t.accessPolicy(),
+		})
 	}
 	reply, err = exchange(control, &l8tunnel.ControlMessage{Body: &l8tunnel.ControlMessage_Register{
 		Register: &l8tunnel.Register{Tunnels: specs},
@@ -167,7 +178,9 @@ func (a *Agent) readControl(control *transport.Stream, lastPong *atomic.Int64) e
 		case *l8tunnel.ControlMessage_Pong:
 			now := time.Now().UnixNano()
 			lastPong.Store(now)
-			a.log.Debug("heartbeat", "rtt", time.Duration(now-body.Pong.GetSentUnixNano()).String())
+			rtt := time.Duration(now - body.Pong.GetSentUnixNano())
+			a.lastRTT.Store(int64(rtt))
+			a.log.Debug("heartbeat", "rtt", rtt.String())
 		default:
 			a.log.Warn("unexpected control message from relay", "type", fmt.Sprintf("%T", body))
 		}
@@ -191,7 +204,8 @@ func (a *Agent) heartbeat(control *transport.Stream, mux *transport.Session, int
 			}
 			nonce++
 			ping := &l8tunnel.ControlMessage{Body: &l8tunnel.ControlMessage_Ping{
-				Ping: &l8tunnel.Ping{Nonce: nonce, SentUnixNano: time.Now().UnixNano()},
+				Ping: &l8tunnel.Ping{Nonce: nonce, SentUnixNano: time.Now().UnixNano(),
+					LastRttUs: time.Duration(a.lastRTT.Load()).Microseconds()},
 			}}
 			if err := protocol.WriteMessage(control, ping); err != nil {
 				return fmt.Errorf("send heartbeat: %w", err)
