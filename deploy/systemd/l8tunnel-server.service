@@ -1,8 +1,10 @@
 [Unit]
 Description=l8tunnel relay server
 Documentation=https://github.com/saichler/l8tunnel
-After=network-online.target
-Wants=network-online.target
+# Not network-online.target: it can stall boot for minutes where
+# wait-online is misconfigured. The relay binds wildcard addresses, and
+# ACME failures before the network is up just trigger a restart.
+After=network.target
 
 [Service]
 Type=simple

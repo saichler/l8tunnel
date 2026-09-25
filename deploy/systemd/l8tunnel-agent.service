@@ -1,8 +1,8 @@
 [Unit]
 Description=l8tunnel agent
 Documentation=https://github.com/saichler/l8tunnel
-After=network-online.target
-Wants=network-online.target
+# The agent reconnects on its own, so it needs no network-online wait.
+After=network.target
 
 [Service]
 Type=simple

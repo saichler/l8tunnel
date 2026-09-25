@@ -182,8 +182,8 @@ On the relay machine: unpack it and run `sudo ./install.sh --cert domain.cert.pe
 It creates the `l8tunnel` user, installs the binary, config and systemd
 unit, installs the certificate (never part of the package), and starts the
 service. `install-cert.sh` renews the certificate; `uninstall.sh [--purge]`
-removes it. The packaged `server.yaml` is preset for probler.dev: edit
-`packaging/relay/server.yaml` for another domain.
+removes it. The packaged `server.yaml` is preset for layer8-tunnel.info;
+`install.sh --domain example.com` uses another base domain.
 
 ## Docker
 

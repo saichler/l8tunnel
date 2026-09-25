@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # Installs (or upgrades) the l8tunnel relay as a systemd service.
-#   sudo ./install.sh [--cert domain.cert.pem --key private.key.pem] [--no-start]
+#   sudo ./install.sh [--domain example.com] [--cert domain.cert.pem --key private.key.pem] [--no-start]
+# --domain sets base_domain in a fresh /etc/l8tunnel/server.yaml (default: the packaged one).
 set -euo pipefail
 cd "$(dirname "$0")"
 
-CERT="" KEY="" START=1
+CERT="" KEY="" START=1 DOMAIN=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --cert) CERT="$2"; shift 2 ;;
     --key) KEY="$2"; shift 2 ;;
     --no-start) START=0; shift ;;
-    -h|--help) sed -n '2,3p' "$0"; exit 0 ;;
+    --domain) DOMAIN="$2"; shift 2 ;;
+    -h|--help) sed -n '2,4p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -19,6 +21,17 @@ die() { echo "install: $*" >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo ./install.sh)"
 command -v systemctl >/dev/null || die "systemd is required"
 [ -z "$CERT$KEY" ] || [ -n "$CERT" -a -n "$KEY" ] || die "--cert and --key go together"
+if [ -n "$DOMAIN" ]; then
+  echo "$DOMAIN" | grep -Eq '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$' || die "--domain $DOMAIN is not a domain name"
+fi
+# The packaged config, with --domain applied.
+PKGCONF="$(mktemp)"
+trap 'rm -f "$PKGCONF"' EXIT
+if [ -n "$DOMAIN" ]; then
+  sed "s/^base_domain: .*/base_domain: $DOMAIN/" server.yaml > "$PKGCONF"
+else
+  cp server.yaml "$PKGCONF"
+fi
 want_arch="$(cat ARCH)"
 case "$(uname -m)" in
   x86_64) have_arch=amd64 ;; aarch64) have_arch=arm64 ;; armv7l) have_arch=armv7 ;; *) have_arch="$(uname -m)" ;;
@@ -38,13 +51,15 @@ install -m 0755 bin/l8tunnel-server /usr/local/bin/l8tunnel-server
 install -d -m 0755 /etc/l8tunnel
 install -d -m 0750 -o root -g l8tunnel /etc/l8tunnel/tls
 if [ -e /etc/l8tunnel/server.yaml ]; then
-  if [ "$(sha256sum < server.yaml)" != "$(sha256sum < /etc/l8tunnel/server.yaml)" ]; then
-    install -m 0640 -o root -g l8tunnel server.yaml /etc/l8tunnel/server.yaml.new
+  if [ "$(sha256sum < "$PKGCONF")" != "$(sha256sum < /etc/l8tunnel/server.yaml)" ]; then
+    install -m 0640 -o root -g l8tunnel "$PKGCONF" /etc/l8tunnel/server.yaml.new
     echo "kept your /etc/l8tunnel/server.yaml; the packaged version is /etc/l8tunnel/server.yaml.new"
   fi
 else
-  install -m 0640 -o root -g l8tunnel server.yaml /etc/l8tunnel/server.yaml
+  install -m 0640 -o root -g l8tunnel "$PKGCONF" /etc/l8tunnel/server.yaml
 fi
+BASE="$(sed -n 's/^base_domain: *//p' /etc/l8tunnel/server.yaml | head -1)"
+echo "base domain: $BASE (tunnels at <name>.$BASE, agents connect to connect.$BASE)"
 install -m 0644 l8tunnel-server.service /etc/systemd/system/l8tunnel-server.service
 systemctl daemon-reload
 systemctl enable --quiet l8tunnel-server
@@ -83,8 +98,8 @@ fi
 cat <<MSG
 
 Next steps
-  1. DNS (Porkbun): *.probler.dev  A  <this machine's public IP>
-     Keep the existing probler.dev and www records; they take precedence.
+  1. DNS: *.$BASE  A  <this machine's public IP>
+     Any existing explicit records (e.g. $BASE, www) keep working; they take precedence.
   2. Firewall: allow inbound TCP 443, 80 and 22000-22999 (ssh/tcp tunnels).
 MSG
 if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
