@@ -150,3 +150,9 @@ func (c *kindClient) expectRefused(what, want, method string, area byte, service
 func uniqueName(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()%1_000_000_000)
 }
+
+// remove deletes the objects an L8Query where-clause selects (REST
+// deletes take a query, not an object).
+func (c *kindClient) remove(area byte, service, typeName, where string) error {
+	return c.do(http.MethodDelete, area, service, &l8api.L8Query{Text: "select * from " + typeName + " where " + where}, nil)
+}

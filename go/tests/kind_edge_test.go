@@ -121,7 +121,7 @@ func TestKindEdgeDomains(t *testing.T) {
 	}
 	stored := got[0]
 	t.Cleanup(func() {
-		c.do(http.MethodDelete, common.AreaEdge, common.DomainService, &tun.EdgeDomain{DomainId: stored.DomainId}, nil)
+		c.remove(common.AreaEdge, common.DomainService, "EdgeDomain", "domainId="+stored.DomainId)
 	})
 
 	// A certificate that doesn't cover the names is refused.
@@ -146,7 +146,7 @@ func TestKindEdgeDomains(t *testing.T) {
 	c.mustDo(post, common.AreaEdge, common.DomainService, admin, nil)
 	adminRow := domainsNamed(t, c, admin.Domain)[0]
 	t.Cleanup(func() {
-		c.do(http.MethodDelete, common.AreaEdge, common.DomainService, &tun.EdgeDomain{DomainId: adminRow.DomainId}, nil)
+		c.remove(common.AreaEdge, common.DomainService, "EdgeDomain", "domainId="+adminRow.DomainId)
 	})
 	tok := issueToken(t, c, uniqueName("ke"), nil)
 	t.Cleanup(func() { revokeToken(c, tok.TokenId) })
@@ -168,7 +168,9 @@ func TestKindAlertRulesAndEdgeNodes(t *testing.T) {
 	if len(rules.List) != 1 || rules.List[0].CooldownMinutes != 60 {
 		t.Fatalf("stored rule %+v", rules.List)
 	}
-	c.do(http.MethodDelete, common.AreaAlerts, common.AlertService, &tun.TunAlertRule{RuleId: rules.List[0].RuleId}, nil)
+	if err := c.remove(common.AreaAlerts, common.AlertService, "TunAlertRule", "ruleId="+rules.List[0].RuleId); err != nil {
+		t.Fatal(err)
+	}
 	c.expectRefused("no targets", "target", post, common.AreaAlerts, common.AlertService,
 		&tun.TunAlertRule{Name: "x", Condition: tun.TunAlertCondition_TUN_ALERT_CONDITION_RELAY_LOST})
 	c.expectRefused("no threshold", "threshold", post, common.AreaAlerts, common.AlertService,
@@ -184,5 +186,7 @@ func TestKindAlertRulesAndEdgeNodes(t *testing.T) {
 	if len(nodes.List) != 1 || nodes.List[0].LastSeen == 0 {
 		t.Fatalf("edge node %+v", nodes.List)
 	}
-	c.do(http.MethodDelete, common.AreaEdge, common.EdgeNodeService, &tun.EdgeNode{EdgeId: id}, nil)
+	if err := c.remove(common.AreaEdge, common.EdgeNodeService, "EdgeNode", "edgeId="+id); err != nil {
+		t.Fatal(err)
+	}
 }

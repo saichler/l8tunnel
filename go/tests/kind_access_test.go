@@ -137,7 +137,9 @@ func TestKindReservationsAndGatewayKeys(t *testing.T) {
 		&tun.TunGatewayKey{Name: uniqueName("bob"), PublicKey: line})
 	c.expectRefused("not a key", "public key", post, common.AreaAccess, common.GatewayKeyService,
 		&tun.TunGatewayKey{Name: uniqueName("bob"), PublicKey: "ssh-ed25519 garbage", Tunnels: []string{"x"}})
-	c.mustDo(http.MethodDelete, common.AreaAccess, common.GatewayKeyService, &tun.TunGatewayKey{KeyId: keys.List[0].KeyId}, nil)
+	if err := c.remove(common.AreaAccess, common.GatewayKeyService, "TunGatewayKey", "keyId="+keys.List[0].KeyId); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestKindAgentCertsAndRevoke(t *testing.T) {

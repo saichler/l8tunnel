@@ -28,7 +28,15 @@ for f in ca.crt ca.key; do
   [ -f "$CA_DIR/$f" ] || { echo "missing $CA_DIR/$f"; exit 1; }
 done
 
-"${KUBECTL[@]}" get namespace l8tunnel >/dev/null 2>&1 || "${KUBECTL[@]}" create namespace l8tunnel
+# The same namespace (with its K8sRules label) the manifests declare.
+cat <<NS | "${KUBECTL[@]}" apply -f -
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: l8tunnel
+  labels:
+    name: l8tunnel
+NS
 "${KUBECTL[@]}" -n l8tunnel create secret generic l8tunnel-agent-ca \
   --from-file=ca.crt="$CA_DIR/ca.crt" --from-file=ca.key="$CA_DIR/ca.key" \
   --dry-run=client -o yaml | "${KUBECTL[@]}" apply -f -
