@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -22,8 +23,11 @@ commands:
       --types t1,t2    allowed tunnel types (tcp, ssh, http, tls)
       --max-tunnels N  maximum connected tunnels
       --ports A-B      allowed tcp/ssh public ports
+      --require-cert   agents must present a client certificate
   token list                             list tokens (never their secrets)
   token revoke NAME                      delete a token and disconnect its agents
+  agent-cert issue --token T --out PREFIX [--days 365]
+                                         write PREFIX.crt and PREFIX.key for an agent
   reservation add --name N --token T [--port P]
                                          bind a tunnel name (and port) to a token
   reservation list
@@ -53,6 +57,8 @@ func RunServerCommand(socket string, args []string, stdout, stderr io.Writer) er
 			fmt.Fprintf(stdout, "revoked token %q; disconnected %d agent session(s)\n", args[2], resp.Disconnected)
 		}
 		return err
+	case "agent-cert issue":
+		return certIssue(c, args[2:], stdout, stderr)
 	case "reservation add":
 		return reservationAdd(c, args[2:], stdout, stderr)
 	case "reservation list":
@@ -89,6 +95,7 @@ func tokenCreate(c *Client, args []string, stdout, stderr io.Writer) error {
 	types := fs.String("types", "", "allowed tunnel types, comma separated")
 	maxTunnels := fs.Int("max-tunnels", 0, "maximum connected tunnels")
 	ports := fs.String("ports", "", "allowed tcp/ssh public ports, A-B")
+	requireCert := fs.Bool("require-cert", false, "agents must present a client certificate")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -97,6 +104,7 @@ func tokenCreate(c *Client, args []string, stdout, stderr io.Writer) error {
 	}
 	resp, err := c.CreateToken(CreateTokenRequest{Name: *name, Policy: auth.Policy{
 		Names: splitList(*names), Types: splitList(*types), MaxTunnels: *maxTunnels, Ports: *ports,
+		RequireCert: *requireCert,
 	}})
 	if err != nil {
 		return err
@@ -119,6 +127,9 @@ func policyString(p auth.Policy) string {
 	if p.Ports != "" {
 		parts = append(parts, "ports="+p.Ports)
 	}
+	if p.RequireCert {
+		parts = append(parts, "require-cert")
+	}
 	if len(parts) == 0 {
 		return "any"
 	}
@@ -131,9 +142,9 @@ func tokenList(c *Client, stdout io.Writer) error {
 		return err
 	}
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tID\tCREATED\tPOLICY")
+	fmt.Fprintln(tw, "NAME\tID\tCREATED\tCERTS\tPOLICY")
 	for _, t := range tokens {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", t.Name, t.ID, t.Created.Format(time.RFC3339), policyString(t.Policy))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", t.Name, t.ID, t.Created.Format(time.RFC3339), t.Certs, policyString(t.Policy))
 	}
 	return tw.Flush()
 }
@@ -275,4 +286,45 @@ func bytesString(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+func certIssue(c *Client, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("agent-cert issue", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	token := fs.String("token", "", "token name")
+	out := fs.String("out", "", "output prefix: writes PREFIX.crt and PREFIX.key")
+	days := fs.Int("days", 365, "validity in days")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *token == "" || *out == "" || fs.NArg() > 0 {
+		return fmt.Errorf("usage: agent-cert issue --token T --out PREFIX [--days 365]")
+	}
+	resp, err := c.IssueCert(*token, *days)
+	if err != nil {
+		return err
+	}
+	certFile, keyFile := *out+".crt", *out+".key"
+	if err := writeNewFile(keyFile, []byte(resp.Key), 0o600); err != nil {
+		return err
+	}
+	if err := writeNewFile(certFile, []byte(resp.Cert), 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "issued certificate %s for token %q, valid until %s\n  %s\n  %s (keep private)\n",
+		resp.Serial, *token, resp.Expires.Format(time.RFC3339), certFile, keyFile)
+	return nil
+}
+
+// writeNewFile refuses to overwrite, so a key can't be silently replaced.
+func writeNewFile(path string, data []byte, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }

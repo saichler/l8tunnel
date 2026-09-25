@@ -53,7 +53,7 @@ func New(cfg Config) (*Server, error) {
 		cfg:          cfg,
 		log:          cfg.Logger,
 		registry:     newRegistry(cfg.NameGracePeriod),
-		routes:       newRouteConfigs(cfg.TLS),
+		routes:       newRouteConfigs(cfg.TLS, cfg.AgentCA),
 		sessions:     map[*agentSession]struct{}{},
 		connLimit:    auth.NewIPLimiter(rl.ConnectionsPerSecond, rl.ConnectionsBurst),
 		authFailures: auth.NewIPLimiter(float64(rl.AuthFailuresPerMinute)/60, rl.AuthFailuresPerMinute),

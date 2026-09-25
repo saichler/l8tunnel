@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +27,7 @@ type agentSession struct {
 	id          string
 	remote      string
 	token       *auth.TokenRecord // set by the handshake
+	peer        *x509.Certificate // verified client certificate, if any
 	agentID     string
 	hello       *l8tunnel.Hello
 	connectedAt time.Time
@@ -42,7 +44,7 @@ type agentSession struct {
 
 // serveAgent runs an agent session on a connection that negotiated the
 // l8tunnel ALPN on the control SNI.
-func (s *Server) serveAgent(conn net.Conn, log *slog.Logger) {
+func (s *Server) serveAgent(conn net.Conn, log *slog.Logger, peer *x509.Certificate) {
 	ip := remoteIP(conn.RemoteAddr())
 	if s.authFailures.Exhausted(ip) {
 		log.Warn("refused agent connection: too many failed authentications from this address")
@@ -55,7 +57,7 @@ func (s *Server) serveAgent(conn net.Conn, log *slog.Logger) {
 	}
 	defer mux.Close()
 
-	sess := &agentSession{server: s, id: protocol.RandomID(8), remote: conn.RemoteAddr().String(), log: log, mux: mux}
+	sess := &agentSession{server: s, id: protocol.RandomID(8), remote: conn.RemoteAddr().String(), log: log, mux: mux, peer: peer}
 	if !s.track(sess) {
 		return
 	}
@@ -108,9 +110,13 @@ func (sess *agentSession) handshake() error {
 			"relay speaks protocol version %d, agent sent %d", protocol.Version, hello.GetProtocolVersion()))
 		return fmt.Errorf("unsupported protocol version %d", hello.GetProtocolVersion())
 	}
-	rec, err := sess.server.verifyToken(hello.GetToken())
+	rec, err := sess.server.authenticate(hello.GetToken(), sess.peer)
 	if err != nil {
-		sess.send(protocol.ErrorMessage(l8tunnel.ErrorCode_ERROR_CODE_UNAUTHORIZED, "invalid token"))
+		msg := "invalid token or certificate"
+		if errors.Is(err, errCertRequired) {
+			msg = "this token requires a client certificate"
+		}
+		sess.send(protocol.ErrorMessage(l8tunnel.ErrorCode_ERROR_CODE_UNAUTHORIZED, "%s", msg))
 		return fmt.Errorf("agent %q: %w", hello.GetAgentId(), err)
 	}
 	if hello.GetAgentId() == "" {
@@ -243,7 +249,49 @@ func (sess *agentSession) send(msg *l8tunnel.ControlMessage) error {
 	return protocol.WriteMessage(sess.control, msg)
 }
 
-var errUnauthorized = errors.New("invalid token")
+var (
+	errUnauthorized = errors.New("invalid token or certificate")
+	errCertRequired = fmt.Errorf("%w: the token requires a client certificate", errUnauthorized)
+)
+
+// authenticate identifies the agent's token from its client certificate,
+// its token string, or both (which must then name the same token).
+func (s *Server) authenticate(token string, peer *x509.Certificate) (*auth.TokenRecord, error) {
+	var byCert *auth.TokenRecord
+	if peer != nil {
+		id, serial, err := auth.CertIdentity(peer)
+		if err != nil {
+			return nil, errUnauthorized
+		}
+		rec, err := s.cfg.Tokens.TokenByID(id)
+		if err != nil {
+			return nil, fmt.Errorf("look up token: %w", err)
+		}
+		// The serial must still be listed: revoking the token (or its
+		// certificates) takes effect on the next handshake.
+		if rec == nil || !rec.HasCertSerial(serial) {
+			return nil, errUnauthorized
+		}
+		byCert = rec
+	}
+	if token == "" {
+		if byCert == nil {
+			return nil, errUnauthorized
+		}
+		return byCert, nil
+	}
+	rec, err := s.verifyToken(token)
+	if err != nil {
+		return nil, err
+	}
+	if byCert != nil && byCert.ID != rec.ID {
+		return nil, errUnauthorized
+	}
+	if byCert == nil && rec.Policy.RequireCert {
+		return nil, errCertRequired
+	}
+	return rec, nil
+}
 
 // verifyToken checks a presented token against the store. Lookup is by the
 // token's ID; the secret is compared with bcrypt.

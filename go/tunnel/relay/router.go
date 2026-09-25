@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"log/slog"
 	"net"
@@ -27,10 +28,18 @@ type routeConfigs struct {
 
 var errRejected = errors.New("no route for this server name")
 
-func newRouteConfigs(base *tls.Config) routeConfigs {
+func newRouteConfigs(base *tls.Config, agentCA *x509.Certificate) routeConfigs {
 	agent := base.Clone()
 	agent.MinVersion = tls.VersionTLS13
 	agent.NextProtos = []string{protocol.ALPN}
+	if agentCA != nil {
+		// Agents may present a client certificate from the agent CA; TLS
+		// verifies the chain, the relay then checks the token and serial.
+		pool := x509.NewCertPool()
+		pool.AddCert(agentCA)
+		agent.ClientCAs = pool
+		agent.ClientAuth = tls.VerifyClientCertIfGiven
+	}
 
 	agentWS := agent.Clone()
 	agentWS.NextProtos = []string{"http/1.1"}
@@ -122,7 +131,7 @@ func (s *Server) serveConn(raw *net.TCPConn) {
 				log.Warn("rejected control connection", "error", err)
 				return
 			}
-			s.serveAgent(tconn, log)
+			s.serveAgent(tconn, log, peerCert(tconn.ConnectionState()))
 		}
 		return
 	}
@@ -230,4 +239,12 @@ func (s *Server) serveTokenTunnel(t *tunnel, hello *tls.ClientHelloInfo, conn *p
 	}
 	tconn.SetReadDeadline(time.Time{})
 	t.forward(tconn, conn.RemoteAddr().String())
+}
+
+// peerCert is the client certificate of a TLS connection, if any.
+func peerCert(cs tls.ConnectionState) *x509.Certificate {
+	if len(cs.PeerCertificates) == 0 {
+		return nil
+	}
+	return cs.PeerCertificates[0]
 }

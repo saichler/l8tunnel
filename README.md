@@ -98,6 +98,11 @@ On the relay, per token:
 ```bash
 l8tunnel-server token create --name ci --names 'ci-*' --types http --max-tunnels 3
 l8tunnel-server token revoke ci        # disconnects its agents immediately
+
+# Client certificates instead of token strings (--require-cert makes them mandatory):
+l8tunnel-server token create --name edge --require-cert
+l8tunnel-server agent-cert issue --token edge --out edge   # edge.crt, edge.key
+# agent: --cert edge.crt --key edge.key   (or cert:/key: in agent.yaml)
 ```
 
 In the agent's config, per tunnel:

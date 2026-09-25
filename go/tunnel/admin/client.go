@@ -103,6 +103,13 @@ func (c *Client) RevokeToken(name string) (RevokeTokenResponse, error) {
 	return resp, err
 }
 
+// IssueCert issues an agent certificate for a token.
+func (c *Client) IssueCert(token string, days int) (IssueCertResponse, error) {
+	var resp IssueCertResponse
+	err := c.do("POST", "/tokens/"+url.PathEscape(token)+"/certs", IssueCertRequest{Days: days}, &resp)
+	return resp, err
+}
+
 // Reserve adds a permanent reservation.
 func (c *Client) Reserve(req ReservationRequest) (ReservationInfo, error) {
 	var resp ReservationInfo

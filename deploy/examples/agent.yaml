@@ -6,6 +6,9 @@ relay: connect.tunnel.example.com:443
 
 # ${VAR} is read from the environment; leaving token out uses $L8TUNNEL_TOKEN.
 token: ${L8TUNNEL_TOKEN}
+# Or (or also) a client certificate from: l8tunnel-server agent-cert issue --token T --out PREFIX
+# cert: /etc/l8tunnel/agent.crt
+# key: /etc/l8tunnel/agent.key
 
 # Serves "l8tunnel-agent status" (connection state, tunnels, traffic).
 status_socket: /run/l8tunnel-agent/status.sock

@@ -82,7 +82,8 @@ type Config struct {
 	RelayAddr string
 	// TLS is the agent's client TLS config (see transport.ClientTLSConfig).
 	TLS *tls.Config
-	// Token authenticates the agent to the relay.
+	// Token authenticates the agent to the relay. It may be empty when TLS
+	// carries a client certificate issued by the relay.
 	Token string
 	// AgentID identifies this agent in relay logs; empty generates one.
 	AgentID string
@@ -110,8 +111,8 @@ func (c *Config) validate() error {
 	if c.TLS == nil || c.TLS.ServerName == "" {
 		return fmt.Errorf("agent: a TLS config with a server name is required")
 	}
-	if c.Token == "" {
-		return fmt.Errorf("agent: a token is required")
+	if c.Token == "" && len(c.TLS.Certificates) == 0 {
+		return fmt.Errorf("agent: a token or a client certificate is required")
 	}
 	switch c.Transport {
 	case "":

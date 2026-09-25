@@ -24,6 +24,10 @@ type AgentFile struct {
 	CA string `yaml:"ca"`
 	// Token may be written as ${ENV_VAR}; empty means $L8TUNNEL_TOKEN.
 	Token string `yaml:"token"`
+	// Cert and Key are a client certificate issued by the relay
+	// ("l8tunnel-server agent-cert issue"); with them, token is optional.
+	Cert string `yaml:"cert"`
+	Key  string `yaml:"key"`
 	// StatusSocket serves "l8tunnel-agent status"; empty disables it.
 	StatusSocket string `yaml:"status_socket"`
 	// Transport is tls (default) or wss (WebSocket, for HTTP-only
@@ -87,6 +91,11 @@ func (f *AgentFile) AgentConfig(logger *slog.Logger, version string) (agent.Conf
 	tlsCfg, err := transport.ClientTLSConfig(serverName, f.CA)
 	if err != nil {
 		return agent.Config{}, err
+	}
+	if f.Cert != "" || f.Key != "" {
+		if err := transport.LoadClientCert(tlsCfg, f.Cert, f.Key); err != nil {
+			return agent.Config{}, err
+		}
 	}
 	tunnels := make([]agent.TunnelConfig, 0, len(f.Tunnels))
 	for _, t := range f.Tunnels {

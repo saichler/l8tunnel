@@ -20,6 +20,20 @@ type TokenInfo struct {
 	Name    string      `json:"name"`
 	Created time.Time   `json:"created"`
 	Policy  auth.Policy `json:"policy"`
+	Certs   int         `json:"certs"` // agent certificates issued
+}
+
+// IssueCertRequest is the body of POST /tokens/{name}/certs.
+type IssueCertRequest struct {
+	Days int `json:"days"`
+}
+
+// IssueCertResponse carries a new agent certificate and its only key copy.
+type IssueCertResponse struct {
+	Cert    string    `json:"cert"`
+	Key     string    `json:"key"`
+	Serial  string    `json:"serial"`
+	Expires time.Time `json:"expires"`
 }
 
 // CreateTokenRequest is the body of POST /tokens.
@@ -63,6 +77,7 @@ func RelayHandler(srv *relay.Server, st *store.Store, logger *slog.Logger) http.
 	mux.HandleFunc("GET /tokens", a.listTokens)
 	mux.HandleFunc("POST /tokens", a.createToken)
 	mux.HandleFunc("DELETE /tokens/{name}", a.revokeToken)
+	mux.HandleFunc("POST /tokens/{name}/certs", a.issueCert)
 	mux.HandleFunc("GET /reservations", a.listReservations)
 	mux.HandleFunc("POST /reservations", a.addReservation)
 	mux.HandleFunc("DELETE /reservations/{name}", a.removeReservation)
@@ -93,7 +108,28 @@ func (a *relayAPI) listTokens(w http.ResponseWriter, _ *http.Request) {
 }
 
 func tokenInfo(t *auth.TokenRecord) TokenInfo {
-	return TokenInfo{ID: t.ID, Name: t.Name, Created: t.Created, Policy: t.Policy}
+	return TokenInfo{ID: t.ID, Name: t.Name, Created: t.Created, Policy: t.Policy, Certs: len(t.CertSerials)}
+}
+
+func (a *relayAPI) issueCert(w http.ResponseWriter, r *http.Request) {
+	var req IssueCertRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid request: %w", err))
+		return
+	}
+	issued, rec, err := a.st.IssueCert(r.PathValue("name"), req.Days)
+	if err != nil {
+		status := statusFor(err)
+		if status == http.StatusInternalServerError && !errors.Is(err, store.ErrNotFound) {
+			status = http.StatusBadRequest
+		}
+		writeErr(w, status, err)
+		return
+	}
+	a.log.Info("agent certificate issued", "token", rec.Name, "serial", issued.Serial, "expires", issued.Expires)
+	writeJSON(w, http.StatusCreated, IssueCertResponse{
+		Cert: string(issued.CertPEM), Key: string(issued.KeyPEM), Serial: issued.Serial, Expires: issued.Expires,
+	})
 }
 
 func (a *relayAPI) createToken(w http.ResponseWriter, r *http.Request) {

@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"crypto/x509"
 	"log/slog"
 	"net/http"
 	"time"
@@ -31,7 +32,11 @@ func (s *Server) newWebSocketServer() (*http.Server, *transport.ConnListener) {
 			return // Upgrade has written the error response
 		}
 		conn := transport.NewWebSocketConn(ws)
-		s.serveAgent(conn, s.log.With("remote", conn.RemoteAddr().String(), "transport", "wss"))
+		var peer *x509.Certificate
+		if r.TLS != nil {
+			peer = peerCert(*r.TLS)
+		}
+		s.serveAgent(conn, s.log.With("remote", conn.RemoteAddr().String(), "transport", "wss"), peer)
 		conn.Close()
 	})
 	ln := transport.NewConnListener()

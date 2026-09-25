@@ -147,6 +147,11 @@ func (f *ServerFile) NewRelay(ctx context.Context, logger *slog.Logger, st *stor
 	}
 	cfg.Version = version
 	cfg.Tokens = st
+	ca, err := st.AgentCA()
+	if err != nil {
+		return nil, fmt.Errorf("agent CA: %w", err)
+	}
+	cfg.AgentCA = ca.Certificate()
 	reservations, err := st.Reservations()
 	if err != nil {
 		return nil, err

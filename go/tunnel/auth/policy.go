@@ -20,6 +20,9 @@ type Policy struct {
 	// Ports is a "min-max" range the token's tcp/ssh public ports must fall
 	// in (requested or allocated); empty means the relay's whole range.
 	Ports string `json:"ports,omitempty"`
+	// RequireCert refuses agents that don't present one of the token's
+	// client certificates (the token string alone isn't enough).
+	RequireCert bool `json:"require_cert,omitempty"`
 }
 
 // Validate checks the policy's patterns, types and port range.

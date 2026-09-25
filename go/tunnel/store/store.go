@@ -223,3 +223,63 @@ func forEachToken(b *bolt.Bucket, fn func(*auth.TokenRecord)) error {
 		return nil
 	})
 }
+
+var bucketCA = []byte("ca") // "cert", "key" -> PEM of the agent CA
+
+// AgentCA returns the relay's agent CA, creating and storing it on first
+// use.
+func (s *Store) AgentCA() (*auth.AgentCA, error) {
+	var ca *auth.AgentCA
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists(bucketCA)
+		if err != nil {
+			return err
+		}
+		if certPEM, keyPEM := b.Get([]byte("cert")), b.Get([]byte("key")); certPEM != nil && keyPEM != nil {
+			ca, err = auth.LoadAgentCA(certPEM, keyPEM)
+			return err
+		}
+		if ca, err = auth.NewAgentCA(); err != nil {
+			return err
+		}
+		certPEM, keyPEM, err := ca.PEM()
+		if err != nil {
+			return err
+		}
+		if err := b.Put([]byte("cert"), certPEM); err != nil {
+			return err
+		}
+		return b.Put([]byte("key"), keyPEM)
+	})
+	return ca, err
+}
+
+// IssueCert issues an agent certificate for a token and records its serial.
+func (s *Store) IssueCert(tokenName string, days int) (*auth.IssuedCert, *auth.TokenRecord, error) {
+	ca, err := s.AgentCA()
+	if err != nil {
+		return nil, nil, err
+	}
+	var issued *auth.IssuedCert
+	var rec *auth.TokenRecord
+	err = s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketTokens)
+		err := forEachToken(b, func(r *auth.TokenRecord) {
+			if r.Name == tokenName {
+				rec = r
+			}
+		})
+		if err != nil {
+			return err
+		}
+		if rec == nil {
+			return fmt.Errorf("token %q: %w", tokenName, ErrNotFound)
+		}
+		if issued, err = ca.Issue(rec, days); err != nil {
+			return err
+		}
+		rec.CertSerials = append(rec.CertSerials, issued.Serial)
+		return put(b, rec.ID, rec)
+	})
+	return issued, rec, err
+}

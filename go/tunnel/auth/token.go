@@ -26,6 +26,9 @@ type TokenRecord struct {
 	Hash    []byte    `json:"hash"` // bcrypt of the secret part
 	Created time.Time `json:"created"`
 	Policy  Policy    `json:"policy"`
+	// CertSerials are the agent certificates issued for this token; a
+	// certificate is accepted only while its serial is listed here.
+	CertSerials []string `json:"cert_serials,omitempty"`
 }
 
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)

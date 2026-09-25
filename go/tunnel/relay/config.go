@@ -4,6 +4,7 @@ package relay
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -88,6 +89,9 @@ type Config struct {
 	ControlSNI string
 	// Tokens looks up the agent tokens the relay accepts.
 	Tokens TokenStore
+	// AgentCA, when set, lets agents authenticate with client certificates
+	// it issued (see store.Store.IssueCert).
+	AgentCA *x509.Certificate
 	// Reservations are loaded at start; more can be added with Reserve.
 	Reservations []PermanentReservation
 	// RateLimits are per client IP.

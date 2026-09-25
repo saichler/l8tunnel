@@ -101,3 +101,16 @@ func CheckALPN(conn *tls.Conn) error {
 	}
 	return nil
 }
+
+// LoadClientCert adds an agent client certificate to cfg.
+func LoadClientCert(cfg *tls.Config, certFile, keyFile string) error {
+	if certFile == "" || keyFile == "" {
+		return fmt.Errorf("both a client certificate and key file are required")
+	}
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return fmt.Errorf("load client certificate %s / %s: %w", certFile, keyFile, err)
+	}
+	cfg.Certificates = []tls.Certificate{cert}
+	return nil
+}

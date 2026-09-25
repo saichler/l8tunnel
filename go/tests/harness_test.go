@@ -93,6 +93,10 @@ func startRelayWith(t testing.TB, opts relayOpts) *relayEnv {
 	if opts.rateLimits != nil {
 		limits = *opts.rateLimits
 	}
+	agentCA, err := opts.store.AgentCA()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var reservations []relay.PermanentReservation
 	stored, err := opts.store.Reservations()
 	if err != nil {
@@ -116,6 +120,7 @@ func startRelayWith(t testing.TB, opts relayOpts) *relayEnv {
 		TLS:                     tlsCfg,
 		BaseDomain:              baseDomain,
 		Tokens:                  opts.store,
+		AgentCA:                 agentCA.Certificate(),
 		Reservations:            reservations,
 		RateLimits:              limits,
 		AccessLog:               opts.accessLog,

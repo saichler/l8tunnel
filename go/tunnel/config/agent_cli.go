@@ -21,6 +21,7 @@ global flags:
   --server-name name  TLS server name of the relay (default: host of --relay)
   --ca file           CA certificate to trust for the relay (default: system roots)
   --token token       agent token (default: $L8TUNNEL_TOKEN)
+  --cert f --key f    client certificate from "l8tunnel-server agent-cert issue"
   --status-socket p   serve "l8tunnel-agent status" on this Unix socket
   --transport t       tls (default) or wss (WebSocket, for HTTP-only networks)
   --proxy url         http://proxy:port, "none", or default HTTPS_PROXY/NO_PROXY
@@ -56,6 +57,8 @@ func ParseAgentArgs(args []string, stderr io.Writer) (*AgentFile, error) {
 	global.StringVar(&f.ServerName, "server-name", "", "")
 	global.StringVar(&f.CA, "ca", "", "")
 	global.StringVar(&f.Token, "token", "", "")
+	global.StringVar(&f.Cert, "cert", "", "")
+	global.StringVar(&f.Key, "key", "", "")
 	global.StringVar(&f.StatusSocket, "status-socket", "", "")
 	global.StringVar(&f.Transport, "transport", "", "")
 	global.StringVar(&f.Proxy, "proxy", "", "")
