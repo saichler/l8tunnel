@@ -19,7 +19,8 @@ home router forwards 80, 443 and 22000–22999 to that one machine. This plan:
    healthy backends.
 2. **Management plane:** a Layer 8 management application (Layer 8 services
    on the ORM, vnet, and an l8ui web UI for desktop and mobile). It manages
-   tokens, reservations, gateway keys, agent certificates, edge routes and
+   tokens, reservations, gateway keys, agent certificates, edge domains
+   (with certificate upload and port forwarding) and
    alert rules, and shows relays, edge nodes and live tunnels in real time.
 3. **Keeps agents unchanged.** The agent/relay wire protocol stays the same,
    so the agent packages already deployed keep working.
@@ -43,10 +44,10 @@ home router forwards 80, 443 and 22000–22999 to that one machine. This plan:
                     ▼
    ┌──────────────── k8s-node-2 (192.168.1.120) ───────────────────────┐
    │  l8tunnel-edge  (hostNetwork, pinned by node label)                │
-   │    SNI / Host / port ─► route table ─► backend pool ─► PROXY v2    │
+   │    SNI / Host / port ─► domains + port forwards ─► pool ─► PROXY v2│
    └───────┬──────────────────────┬──────────────────────┬─────────────┘
            │ tunnel traffic:      │ agents (connect.*):  │ other domains
-           │ to the owning relay  │ least-loaded relay   │ (EdgeRoute pools)
+           │ to the owning relay  │ least-loaded relay   │ (EdgeDomain pools)
            ▼                      ▼                      ▼
    ┌──────────────┐ ┌──────────────┐          ┌─────────────────────┐
    │ relay pod A  │ │ relay pod B  │  ...     │ e.g. l8tunnel-web,  │
@@ -88,7 +89,7 @@ home router forwards 80, 443 and 22000–22999 to that one machine. This plan:
   (X-1) and tunnel-visitor and gateway auth (X-2), both approved by you.
 - **The data plane keeps working when the management plane is down.**
   - Relays keep a local snapshot of tokens, reservations and gateway keys,
-    and the edge keeps its routes (both are refreshed from change
+    and the edge keeps its domains and certificates (both are refreshed from change
     notifications).
   - Existing tunnels and new agent logins keep working.
   - Only management changes (for example issuing a token) wait until the
@@ -98,7 +99,7 @@ home router forwards 80, 443 and 22000–22999 to that one machine. This plan:
 
 | Component | Binary / image | Runs as | Role |
 |---|---|---|---|
-| Edge | `go/tun/edge` → `saichler/l8tunnel-edge` | hostNetwork, pinned to the router's target node | Public listeners, routing, load balancing, health checks, PROXY v2 to backends |
+| Edge | `go/tun/edge` → `saichler/l8tunnel-edge` | hostNetwork, pinned to the router's target node | Listeners derived from the domain table, routing, load balancing, health checks, PROXY v2 to backends |
 | Relay | `go/tun/relay` → `saichler/l8tunnel-relay` | 2+ replicas, pod network, no host ports | The existing relay in **cluster mode**: agent sessions, tunnel serving, HTTP termination, OIDC, SSH gateway |
 | Registry | `go/tun/registry` → `saichler/l8tunnel-registry` | StatefulSet, 1 replica | The single owner of the in-memory live services `TunLive` and `TunRelay`: cluster-wide name, port and domain claims. No database |
 | Backend | `go/tun/main` → `saichler/l8tunnel` | StatefulSet (Postgres base image) | ORM services, the issuing service, `EdgeNode`, alert evaluation |
@@ -116,74 +117,169 @@ second entry point to the same `tunnel/relay` package, started with
 
 ## 3. Edge proxy
 
-A new package, `go/tunnel/edge`, plus the minimal `go/tun/edge/main.go`.
+A new package, `go/tunnel/edge`, plus the minimal `go/tun/edge/main.go`. The
+edge is managed through a **domain table** (§3.1). Each domain has uploaded
+certificates and a **port forwarding table**, for example `443 → 2443`,
+`14443 → 13443`, `9092 → 9093`. The edge's listeners are derived from those
+tables.
 
-### 3.1 Listeners (on the host network)
+### 3.1 Management model: domains and port forwards
 
-| Public port | How the edge picks the route |
+**`EdgeDomain`** (a Prime Object, one row per site) has these fields:
+
+- **Domain and aliases:** `domain` (for example `probler.dev`) and `aliases`
+  (for example `www.probler.dev`). Aliases may be wildcards
+  (`*.example.com`).
+- **`kind`:**
+  - `SITE`: an ordinary site the operator hosts behind the router.
+  - `TUNNEL_BASE`: the built-in row for `<base>` and `*.<base>`, served by
+    the relays.
+- **`enabled`**, plus optional **`allow_ips` / `deny_ips`** (for example
+  LAN-only for the management UI).
+- **Certificates** (FileUploadPattern):
+  - `cert_storage_path`, `cert_file_name`, `cert_file_size`: the full chain
+    in PEM.
+  - `key_storage_path`, `key_file_name`, `key_file_size`: the private key in
+    PEM.
+  - Both are uploaded through the Layer 8 **FileStore** service (encrypted at
+    rest, SHA-256). The domain stores only the storage paths, never the bytes.
+- **Certificate summary**, filled by the service callback after it validates
+  an upload (§5.3): `cert_subject`, `cert_sans`, `cert_issuer`,
+  `cert_not_after`, `cert_fingerprint`, and `cert_status` (`VALID`,
+  `EXPIRING`, `EXPIRED`, `MISMATCH`, `MISSING`).
+- **`port_forwards`**: repeated `EdgePortForward`, a child embedded in the
+  domain.
+
+**`EdgePortForward`** (one row of the domain's port forwarding table):
+
+| Field | Meaning |
 |---|---|
-| 443 | Peeks the TLS ClientHello (SNI and ALPN) without terminating TLS, using the ClientHello reader extracted from the relay in Phase K0 |
-| 80 | Peeks the first HTTP request's `Host` header |
-| 22000–22999 (the relay's `tcp_port_range`) | Destination port: the mode A tunnel that holds that port |
-| 2222 (when the SSH gateway is on) | Fixed route to the relay pool |
+| `listen_port`, `listen_port_end` | The public port on the edge; `listen_port_end` is set only for a range (the relays' mode A range) |
+| `protocol` | `TLS` (routed by SNI, so several domains can share a port), `HTTP` (routed by `Host`, shareable), or `TCP` (no name to route by, so the port belongs to this domain alone) |
+| `mode` | `TERMINATE` (decrypt with this domain's certificate, reverse-proxy HTTP), `PASSTHROUGH` (forward the encrypted bytes untouched) or `RELAY` (only on the `TUNNEL_BASE` row) |
+| `target_kind` | `TARGETS` (the explicit list below), `DNS` (every A record of `target_dns`, for headless Services and DaemonSets), `NODE_LOCAL` (the edge's own node IP, which is what the l8web proxy does with `NODE_IP`), or `RELAYS` (only on `TUNNEL_BASE`) |
+| `targets` | For `TARGETS`: the load-balanced pool, as repeated `EdgeTarget {host, port, weight, enabled}`, for example `192.168.1.120:2443 ×1`, `192.168.1.121:2443 ×1`, `192.168.1.122:2444 ×2`. Each member has its own IP **and** port. Disabling one takes it out of rotation without deleting it |
+| `target_dns`, `target_port` | For `DNS` and `NODE_LOCAL`: the name and the port, for example `2443` |
+| `backend_scheme`, `skip_verify` | For TERMINATE: `HTTPS` or `HTTP` to the backend. Certificate verification is on unless `skip_verify` is set (shown as a warning) |
+| `proxy_protocol` | Send PROXY v2 to the backend (PASSTHROUGH and TCP) |
+| `lb`, `health_type`, `health_path`, `health_interval` | Load balancing across the pool and health checks (§3.4) |
+| `enabled`, `note` | |
 
-All of these come from configuration. A listener that can't bind fails at
-startup (fail-fast).
+**Example.** Today's l8web proxy table becomes rows like these:
 
-### 3.2 Route resolution (443 and 80)
+| Domain | Aliases | Port forwards |
+|---|---|---|
+| `probler.dev` | `www.probler.dev` | `443 → 192.168.1.120:2443 + 192.168.1.121:2443` (TARGETS, round robin); `9092 → 9093`, `14443 → 13443`, `9094 → 9095`, `6768 → 6767`, `5444 → 5445`, `3114 → 3113` (NODE_LOCAL). All TLS / TERMINATE / HTTPS |
+| `l8erp.one` | `www.l8erp.one` | `443 → 2773` |
+| `admin.layer8-tunnel.info` | | `443 → 5443` (PASSTHROUGH to `l8tunnel-web`), LAN-only `allow_ips` |
+| `layer8-tunnel.info` (`TUNNEL_BASE`) | `*.layer8-tunnel.info` | `443 → relays:8443`, `80 → relays:8080`, `22000–22999 → relays:8444`, `2222 → relays:2222` (RELAY) |
 
-The edge checks the following in order; the first match wins:
+The `TUNNEL_BASE` row is created by the backend at first start from the
+cluster configuration. Its port forwards are read-only in the UI, because
+they follow the relay configuration. Its certificate upload and IP lists can
+be edited. The certificate uploaded there is the one the relays serve (§4.1).
 
-1. **An EdgeRoute's exact domain** (for example `admin.layer8-tunnel.info`, or
-   another site the operator hosts behind the same router).
-2. **The control name** `connect.<base>`: goes to the relay pool, picking the
-   ready relay with the fewest agent sessions (this balances agents across
-   relays).
+**Validation** (done in the `EdgeDomain` callback):
+
+- A domain or alias belongs to exactly one domain row.
+- A `TCP` port belongs to one domain.
+- A port can't mix protocols across domains.
+- No row may overlap the relay port range or the relays' fixed ports.
+- `TERMINATE` needs a valid certificate that covers the domain and its
+  aliases.
+- A `SITE` domain under `<base>` blocks tunnels from taking that name
+  (`TunLive` checks it the way it checks reserved names).
+
+### 3.2 Listeners derived from the table
+
+- **The listener set** is the union of every enabled port forward.
+- **Opening and closing listeners:** after every change, the edge opens new
+  listeners and closes removed ones (draining open connections for up to
+  60 s). It never needs a restart.
+- **How a listener picks the domain:**
+  - `TLS` listeners peek the ClientHello (SNI and ALPN) without terminating,
+    using `tunnel/sni` from Phase K0.
+  - `HTTP` listeners peek the first request's `Host` header.
+  - `TCP` listeners and the relay range route by port alone. For the relay
+    range, the live-tunnel table maps the port to its owner relay.
+- **A port that can't be bound** (for example one already used on the node)
+  doesn't stop the edge. It is reported in the edge's `EdgeNode` record, with
+  the error, and shown red in the UI, and it posts an event that the alert
+  rules can notify on.
+- **Router ports view.** The UI shows every public port the edge listens on,
+  so you know exactly which ports to forward on the router (§6).
+- **Bootstrap.** Before any domain rows exist (the first start, or with the
+  management plane unreachable and no cache), the edge opens the
+  `TUNNEL_BASE` ports from its bootstrap ConfigMap, so tunnels work from the
+  first minute.
+
+### 3.3 Route resolution on shared TLS and HTTP ports
+
+On a shared port, the edge checks the following in order; the first match
+wins:
+
+1. **An exact domain or alias of a `SITE` row** that has a port forward on
+   this port, for example `admin.layer8-tunnel.info` or `www.probler.dev`.
+2. **The control name** `connect.<base>` (on a `TUNNEL_BASE` port): goes to
+   the relay pool, picking the ready relay with the fewest agent sessions.
+   This balances agents across relays.
 3. **A live tunnel's hostname**: `<name>.<base>`, or a custom domain from the
    live-tunnel table (§4.2). It goes to the relay that owns the tunnel. This
-   route is affinity, not load balancing, because only that relay holds the
-   agent's session.
-4. **A wildcard EdgeRoute** (`*.example.com`).
-5. **Anything else under `<base>`, with no SNI, or unknown**: the default
-   route, which is the relay pool (round robin). This keeps today's behavior:
-   the relay answers with its 404 page or TLS alert.
+   is affinity, not load balancing, because only that relay holds the agent's
+   session.
+4. **A wildcard alias of a `SITE` row.**
+5. **Anything else under `<base>`, with no SNI, or unknown:**
+   - On a `TUNNEL_BASE` port, the relay pool (round robin). This keeps
+     today's behavior: the relay answers with its 404 page or a TLS alert.
+   - On other ports, a TLS alert or a 404 page.
 
 If the live-tunnel table is unavailable or stale, step 3 falls back to any
 ready relay. That relay forwards the connection to the owner (§4.4), so a
 stale table costs one extra hop and never fails a connection.
 
-### 3.3 Route modes
-
-| Mode | What the edge does | Used for |
-|---|---|---|
-| `RELAY` | L4: writes a PROXY v2 header, then passes the raw bytes through | Everything handled by relays |
-| `PASSTHROUGH` | L4 to the route's backend pool. The PROXY v2 header is optional per route, because not every backend understands it | Sites that serve their own valid certificate |
-| `TERMINATE` | Terminates TLS with the route's certificate (a mounted Secret), then reverse-proxies HTTP/1.1, h2 and WebSocket to the pool over https or http. Sets `X-Forwarded-For/Proto/Host`. Built on l8tunnel's existing `httpproxy` and `certs` packages (§3.7) | Sites whose backends use self-signed certificates. This is what `l8web/go/web/proxy` does today; see §9 |
-
 ### 3.4 Load balancing and health
 
-- **Pools.** A pool is made of static `address:port` members, a DNS name
-  (every A record becomes a member, which works with headless Services and
-  DaemonSets), or the relay pool (from `TunRelay` records, §4.3).
+- **Load balancing is per port forward.** Each port forward is its own
+  pool, and every new connection (L4) or request (TERMINATE) goes to one
+  healthy member of that pool. The pool is built from `target_kind`:
+  - the explicit `targets` list: `ip:port` members with weights
+  - the edge's own node
+  - a DNS name (every A record becomes a member)
+  - the relay pool (from `TunRelay` records, §4.3)
+
   Simulated records (§5.3) are never pool members or routes.
-- **Algorithms.** Per route: `ROUND_ROBIN` (the default), `LEAST_CONN`,
-  `SOURCE_HASH` (client-IP affinity), or weights.
-- **Active health checks.** TCP connect, or an HTTP(S) GET on a path, every
-  `interval` seconds. A member is marked down after N failures and back up
-  after M successes. Relays are also marked down when their `TunRelay`
-  heartbeat is older than 3 intervals, or when they report `DRAINING` (then
-  they get no new agents).
+- **Algorithms.** Per port forward:
+  - `ROUND_ROBIN` (the default; weighted when members have weights)
+  - `LEAST_CONN` (fewest active connections, weighted)
+  - `SOURCE_HASH` (client-IP affinity, so a client keeps hitting the same
+    member; consistent hashing, so adding a member moves only a share of
+    the clients)
+  - `RANDOM` (power of two choices)
+
+  For TERMINATE, the HTTP transport keeps a separate connection pool per
+  member, so balancing still works with keep-alive connections.
+- **Example.** `443 → 192.168.1.120:2443 ×1, 192.168.1.121:2443 ×1,
+  192.168.1.122:2444 ×2` with `ROUND_ROBIN`: out of every 4 new
+  connections, .122 gets 2 and the others 1 each. If .121 fails its health
+  check it drops out, and .120 and .122 share the traffic 1:2 until it
+  recovers.
+- **Active health checks.** TCP connect, or an HTTP(S) GET on
+  `health_path`, every `health_interval` (default 10 s). A member is marked down after 3 failures and
+  back up after 2 successes. Relays are also marked down when their
+  `TunRelay` heartbeat is older than 3 intervals, or when they report
+  `DRAINING` (then they get no new agents).
 - **Passive checks.** A failed dial marks the member suspect, and the edge
   retries the next member. It only retries before any client byte has been
   forwarded, so this is safe for TLS.
-- **No healthy member.** A TLS route gets a TLS alert, an HTTP route gets a
-  503 page. The edge also posts an event and the alert rules can notify
+- **No healthy member.** A TLS forward gets a TLS alert, an HTTP forward gets
+  a 503 page. The edge also posts an event and the alert rules can notify
   (§5.5).
 
 ### 3.5 Client address and trust
 
-- The edge adds a **PROXY protocol v2** header to every connection it forwards
-  to relays (and to PASSTHROUGH backends when the route enables it).
+- **PROXY protocol v2.** The edge adds a PROXY v2 header to every
+  connection it forwards to relays, and to other backends when the port
+  forward sets `proxy_protocol`.
   - Relays read it on their internal listeners, so IP allow and deny lists,
     rate limits, access logs and `X-Forwarded-For` keep seeing the real
     client IP.
@@ -193,21 +289,28 @@ stale table costs one extra hop and never fails a connection.
 - **Per-IP connection rate limiting** moves to the edge: one edge means a
   cluster-wide limit. Relays keep their per-IP auth-failure limits locally,
   so with N relays those limits are N times looser. This is documented.
-- **An optional allow/deny IP list per EdgeRoute**, for example to keep the
-  management UI LAN-only.
+- **Per-domain `allow_ips` / `deny_ips`** are checked before any backend is
+  dialed.
 
-### 3.6 Configuration and caching
+### 3.6 Configuration, certificates and caching
 
-- The routes are `EdgeRoute` objects, edited in the management UI.
-- The edge loads them over vnic at startup, applies change notifications, and
-  writes the last good set to `/data/edge-routes.json`. It reads that file
-  when the management plane is unreachable.
-- A bootstrap file (ConfigMap) holds listeners, the base domain, the relay
-  pool and trusted settings. When no routes are stored, the edge works with
-  only the relay pool.
-- Every few seconds the edge reports its status and backend health as an
-  `EdgeNode` record, and it serves `/healthz`, `/readyz` and Prometheus
-  `/metrics`: connections, bytes and dial failures per route and member.
+- **Loading domains.** The edge loads `EdgeDomain` rows over vnic at
+  startup and applies change notifications.
+- **Loading certificates.** For every domain with a certificate, the edge
+  downloads the chain and key from FileStore over vnic (its service account
+  may download; §5.6). It loads them into `certs.ModeStaticSet` (§3.7), and
+  reloads on every change to a domain's storage paths.
+- **Cache for resilience.** The last good set is written to
+  `/data/edge-cache/`: the domains as JSON, and certificates and keys as
+  files with mode 0600 on the edge's own volume. The edge reads it when the
+  management plane is unreachable.
+- **Bootstrap ConfigMap:** the base domain, the relay pool, trusted proxies
+  and the `TUNNEL_BASE` ports (§3.2).
+- **Status reporting.** Every few seconds the edge writes an `EdgeNode`
+  record: listener status (port, protocol, bound or error, domains), backend
+  health per port forward, connections and bytes. It serves `/healthz`,
+  `/readyz` and Prometheus `/metrics` (connections, bytes and dial failures
+  per domain, port and member).
 
 ### 3.7 Implementation: reuse, don't port
 
@@ -217,37 +320,40 @@ not ported from `l8web/go/web/proxy` (the assessment is in §9, item 5).
 - **`httpproxy`: the HTTP engine, unchanged.**
   - Its `Tunnel` interface (`ID()`, `OpenStream(ctx, clientAddr)`,
     `Access()`) is the seam. The edge's `edge/pool.go` implements it once
-    per TERMINATE route:
-    - `OpenStream` picks a healthy member with the route's LB algorithm and
-      dials it, over TLS for https backends.
+    per TERMINATE port forward:
+    - `OpenStream` picks a healthy member with the forward's LB algorithm
+      and dials it, over TLS for https backends.
     - Dial failures mark the member suspect and try the next one (§3.4).
-    - `Access()` returns the route's IP lists.
-  - `LookupFunc` maps the Host to the route's pool.
+    - `Access()` returns the domain's IP lists.
+  - One `httpproxy.Proxy` serves each listener. Its `LookupFunc` maps the
+    Host to the pool of that domain's forward on that port.
   - The edge then gets, with no new code:
     - HTTP/1.1 and h2 on the client side
     - streaming without buffering (`FlushInterval: -1`)
     - WebSocket upgrades through the standard reverse proxy
     - forwarded headers, with incoming `X-Forwarded-*` dropped
-    - connection reuse per route (one `http.Transport` per pool)
+    - connection reuse per forward (one `http.Transport` per pool)
     - access logs and the relay's error pages
 - **Two small additions to `httpproxy`:**
   1. The error handler maps "no healthy member" to 503. Other upstream
      failures stay 502.
   2. An `UpstreamTLS` option per `Tunnel`, where `verify` is the default.
-     `skip-verify` must be set explicitly on the route (for self-signed
-     backends) and is shown as a warning in the UI.
-- **One addition to `certs`: `ModeStaticSet`.** It loads a set of static
-  certificates **once**, keyed by domain, including wildcards, and selects
-  them by SNI. It reloads when a mounted Secret file changes (an mtime check
-  every 30 s).
-  - An unknown SNI gets a handshake failure. It never falls back to another
-    domain's certificate.
+     `skip-verify` comes only from the forward's `skip_verify` field.
+- **One addition to `certs`: `ModeStaticSet`.**
+  - It holds a set of certificates keyed by domain, including wildcards,
+    built from PEM bytes (the FileStore downloads). They're parsed **once**
+    and replaced atomically when a domain's certificate changes.
+  - It selects a certificate by SNI. An unknown SNI gets a handshake
+    failure; it never falls back to another domain's certificate.
   - The relay's existing `ModeStatic` and ACME modes are untouched.
 - **Also reused:** `tunnel/sni` (K0) for peeking at the connection and
   `tunnel/pipe` for L4 copying.
-- **New code in `tunnel/edge`:** listeners, route resolution, pools and
-  health checks, the PROXY v2 writer, the route cache and `EdgeNode`
-  reporting.
+- **New code in `tunnel/edge`:**
+  - dynamic listeners and route resolution
+  - pools and health checks
+  - the PROXY v2 writer
+  - the FileStore certificate loader and the cache
+  - `EdgeNode` reporting
 
 ## 4. Relay cluster mode
 
@@ -263,7 +369,8 @@ shared state lives and how connections arrive.
 | Gateway keys and grants | bbolt | `TunGatewayKey` (ORM) |
 | Issued agent certificates | serials on the token | `TunAgentCert` (ORM). A certificate is accepted only while its serial is listed and not revoked |
 | Agent CA certificate and key | bbolt | A Kubernetes Secret mounted in every relay (the backend signs with it too) |
-| OIDC signing key, TLS certificate, OIDC client secrets | bbolt / files | Secrets shared by all relays, so cookies and codes validate on any relay |
+| TLS certificate for `<base>` and `*.<base>` | files | Uploaded on the `TUNNEL_BASE` domain row (§3.1) and stored in FileStore. Relays download it over vnic, reload it on change, and keep a 0600 copy on `/data`. An optional `l8tunnel-tls` Secret is used only for the very first start, before any upload |
+| OIDC signing key, OIDC client secrets | bbolt / files | Secrets shared by all relays, so cookies and codes validate on any relay |
 | Active names, ports, domains, grace holds | in memory, per relay | `TunLive`: a cluster-wide in-memory service (§4.2) |
 | Relay status | the admin socket | A `TunRelay` record, heartbeat every 5 s |
 
@@ -394,7 +501,7 @@ go/tun/
 │   ├── gwkeys/           TunGwKeyService.go, ...Callback.go
 │   ├── agentcerts/       TunAgCertService.go, ...Callback.go
 │   └── issue/            TunIssueService.go (non-ORM: returns secrets once)
-├── edge/routes/          EdgeRouteService.go, ...Callback.go
+├── edge/domains/         EdgeDomainService.go, ...Callback.go (certificate validation via FileStore)
 ├── edge/nodes/           EdgeNodeService.go (in-memory, TTL)
 ├── live/tunnels/         TunLiveService.go, ...Callback.go (in-memory, activated only by the registry)
 ├── live/relays/          TunRelayService.go (in-memory, activated only by the registry)
@@ -418,7 +525,8 @@ ServiceName ≤ 10 characters; one ServiceArea per module.
 | access (40) | `TunGwKey` | `TunGatewayKey` | `keyId` | ORM | backend |
 | access (40) | `TunAgCert` | `TunAgentCert` | `certId` (the serial) | ORM | backend |
 | access (40) | `TunIssue` | `TunIssueRequest` (request/response only, not persisted) | — | none | backend |
-| edge (41) | `EdgeRoute` | `EdgeRoute` | `routeId` | ORM | backend |
+| edge (41) | `EdgeDomain` | `EdgeDomain` | `domainId` | ORM | backend |
+| system (0) | `FileStore` (l8services, not project code) | uploaded certificate and key files | `storagePath` | encrypted files on `/data/l8files` | backend |
 | edge (41) | `EdgeNode` | `EdgeNode` | `edgeId` | in-memory, TTL | backend |
 | live (42) | `TunLive` | `TunLiveTunnel` | `tunnelId` | in-memory | registry (§4.2) |
 | live (42) | `TunRelay` | `TunRelay` | `relayId` | in-memory | registry |
@@ -429,7 +537,8 @@ generator of their own):
 
 - `TunTokenPolicy` and `TunPortRange` in `TunToken`
 - `TunGatewayGrant` in `TunGatewayKey`
-- `EdgeBackend` and `EdgeHealthCheck` in `EdgeRoute`
+- `EdgePortForward` in `EdgeDomain` (the port forwarding table), and
+  `EdgeTarget` in `EdgePortForward` (the load-balancing pool)
 - `EdgeBackendStatus` in `EdgeNode`
 
 **References between Prime Objects** are ID strings only, for example
@@ -441,7 +550,8 @@ generator of their own):
 **Protobuf rules:**
 
 - Every enum starts with `*_UNSPECIFIED = 0`. The enums: `TunTunnelType`,
-  `EdgeRouteMode`, `EdgeLbAlgorithm`, `EdgeHealthType`, `TunRelayState`,
+  `EdgeDomainKind`, `EdgeCertStatus`, `EdgeProtocol`, `EdgeForwardMode`,
+  `EdgeTargetKind`, `EdgeBackendScheme`, `EdgeLbAlgorithm`, `EdgeHealthType`, `TunRelayState`,
   `TunLiveState`, `TunAlertCondition` and `TunIssueKind`.
 - Every `XxxList` type has `repeated Xxx list = 1; l8api.L8MetaData metadata = 2;`.
 - Bindings are generated only through `proto/make-bindings.sh` (`docker run -i`).
@@ -474,14 +584,30 @@ Plaintext secrets never reach the ORM or the event log.
 
 - **`TunResv`, `TunGwKey`:** validation uses the same rules as the
   standalone admin API.
-- **`EdgeRoute`:**
-  - Validation:
-    - domains must be unique across routes
-    - a route under `<base>` blocks tunnels from using that name (`TunLive`
-      checks EdgeRoute domains the way it checks reserved names)
-    - TERMINATE needs a certificate reference
-    - health-check bounds are checked
-  - Every accepted change bumps a `routesVersion` that the edges report back.
+- **`EdgeDomain`:**
+  - `Before(POST)` generates `domainId`. Every POST, PUT or PATCH runs the
+    §3.1 validation: domain and alias uniqueness, port and protocol
+    conflicts, no overlap with the relay ports, and health-check bounds.
+  - **Certificate check.** When `cert_storage_path` or `key_storage_path`
+    changes, the callback fetches both files **from FileStore over vnic**
+    (no file I/O in the callback, per FileUploadPattern). It then checks:
+    - the chain parses
+    - the key matches the leaf
+    - the leaf covers the domain and every alias (wildcards included)
+    - it's within its validity dates
+
+    It fills the certificate summary fields. A mismatch rejects the save,
+    with a clear message such as "certificate doesn't cover
+    www.probler.dev".
+  - **Protected fields.** Only the callback writes the summary fields; values
+    a client sends are ignored.
+  - **`TUNNEL_BASE` row.** The backend creates it at first start. Its
+    `port_forwards` and `kind` can't be changed through the API, and it
+    can't be deleted.
+  - **Version.** Every accepted change bumps a `configVersion` that edges
+    report back, so the UI shows whether each edge has applied it.
+  - **Events.** Certificate uploads and replacements post events. The
+    certificate summary feeds `CERT_EXPIRING` (§5.5).
 - **`TunLive`, `TunRelay`, `EdgeNode` and simulated records:**
   - Each type has a `simulated` boolean. Only the `mock` service account
     may set it (the security config enforces this).
@@ -510,7 +636,8 @@ forget. The exact category methods are chosen in K1 from the 16 converters in
 - agent session up/down and tunnel registered/unregistered (relays; these can
   be turned off with `cluster.events.sessions: false`)
 - relay joined, draining or lost (relays and the registry)
-- edge backend down or up, and route set applied (edge)
+- edge backend down or up, listener bound or failed, and domain configuration applied (edge)
+- domain certificate uploaded or replaced (backend)
 - certificate expiring (backend)
 
 The project never activates `Events` itself (l8common does), and the UI
@@ -522,11 +649,13 @@ The project never activates `Events` itself (l8common does), and the UI
   - `RELAY_LOST`
   - `NO_READY_RELAY`
   - `EDGE_POOL_DOWN`
-  - `CERT_EXPIRING` (threshold in days; relays report the TLS certificate's
-    `NotAfter`, today Dec 24, 2026)
+  - `CERT_EXPIRING` (threshold in days) for every domain's certificate
+    (`EdgeDomain.cert_not_after`). The tunnel wildcard currently expires on
+    Dec 24, 2026.
+  - `EDGE_LISTENER_FAILED` (a port forward's listener couldn't bind)
   - `TOKEN_OFFLINE` (all of a token's agents gone for longer than N minutes)
-- The backend's `alerts/evaluator.go` subscribes to `TunRelay`, `EdgeNode`
-  and `TunLive`. When a condition matches it sends through
+- The backend's `alerts/evaluator.go` subscribes to `TunRelay`, `EdgeNode`,
+  `EdgeDomain` and `TunLive`. When a condition matches it sends through
   `vnic.Resources().Notify().Send(...)` to each target, with a per-rule
   cooldown.
 - Deliveries appear in the shared delivery log. There's no project SMTP or
@@ -540,25 +669,33 @@ The project never activates `Events` itself (l8common does), and the UI
 - **Security config** `l8secure/go/secure/plugin/l8tunnel/l8tunnel.json` in
   the l8secure repository. Roles:
   - `admin`: everything
-  - `operator`: live views, drain, disconnect, reservations, routes; cannot
-    issue tokens or certificates
+  - `operator`: live views, drain, disconnect, reservations, and edge
+    domains and port forwards (not certificate upload); cannot issue tokens or
+    certificates
   - `viewer`: read-only
   - `relay` (service account): read `TunToken` including `secretHash`; read
-    reservations, gateway keys, certificates and routes; write `TunLive` and
+    reservations, gateway keys, certificates and edge domains; download the
+    `TUNNEL_BASE` certificate and key from FileStore; write `TunLive` and
     `TunRelay`
-  - `edge` (service account): read routes, `TunLive` and `TunRelay`; write
+  - `edge` (service account): read edge domains, `TunLive` and `TunRelay`;
+    download certificates and keys from FileStore; write
     `EdgeNode`
-  - `registry` (service account): read reservations and routes, for claim
+  - `registry` (service account): read reservations and edge domains, for claim
     checks
   - `mock` (service account, only in `run-local.sh` and KIND): write
     simulated live records and seed configuration objects
 - **Deny rules** blank `secretHash` for everyone except `relay`.
+- **FileStore:** upload (POST) is allowed for `admin` only. Download (PUT)
+  is allowed only for `admin` and the `edge`, `relay` and `backend` service
+  accounts. So operators and viewers can see a domain's certificate summary
+  but can never fetch a private key. The UI never offers a key download.
 - **Provisioning** of users and roles goes only through the config JSON or
   the Security API (area 73), including from the mock data. There's no
   project-owned users service, and the project never imports l8secure.
 - **Management UI exposure:** served through the edge as
   `admin.<base>` (PASSTHROUGH to `l8tunnel-web`, which serves the wildcard
-  certificate). Its EdgeRoute has a LAN-only `allow_ips` by default, and
+  certificate). Its `EdgeDomain` row has a LAN-only `allow_ips` by
+  default, and
   l8secure TFA is enabled in `login.json`.
 
 ### 5.7 Data-plane access control and `ISecurityProvider`
@@ -573,7 +710,7 @@ puts that line in writing.
   authenticated and authorized by l8secure, including:
   - issuing and revoking tokens and certificates
   - drain and disconnect
-  - route edits
+  - edge domain, port forward and certificate changes
 - Only the §5.6 roles apply. Users are provisioned only through the security
   config JSON or the Security API (area 73).
 - Every management action is recorded as an event.
@@ -640,17 +777,18 @@ section is config, enums, columns, forms and init, and init calls
 | Dashboard | TunRelay, TunLive, EdgeNode | Layer8DWidget KPIs: ready relays, agents online, tunnels by type, unhealthy backends, days to certificate expiry | Mobile widgets | KPI counts query `page 0` (L8QL gotcha) |
 | Tunnels ▸ Live | `TunLiveTunnel` | Layer8DTable `realtime`, read-only view form, **Disconnect** action | Layer8MTable, read-only card | Immutable, so read-only UI (ImmutabilityUiAlignment) |
 | Tunnels ▸ Relays | `TunRelay` | Table (realtime), **Drain / Resume** actions | Same | Read-only apart from the state action |
-| Tunnels ▸ Edge nodes | `EdgeNode` | Table; backend status as a read-only inline table | Same | |
+| Tunnels ▸ Edge nodes | `EdgeNode` | Table; listener status and backend health as read-only inline tables | Same | |
 | Access ▸ Tokens | `TunToken` | CRUD; the policy as form sections with an inline table for port ranges; **Issue token** runs a custom handler that POSTs to `TunIssue` and shows the token once, with copy | Same (mobile form and confirm) | `secretHash` never shown |
 | Access ▸ Reservations | `TunReservation` | CRUD, token reference picker | Same | |
 | Access ▸ Gateway keys | `TunGatewayKey` | CRUD, grants as an inline table | Same | |
 | Access ▸ Agent certificates | `TunAgentCert` | List + **Issue certificate** (shown once, downloaded as PEM) + revoke (PATCH) | Same | |
-| Edge ▸ Routes | `EdgeRoute` | CRUD; backends and health check as inline tables and sections; mode, LB and health-type enums | Same | |
+| Edge ▸ Domains | `EdgeDomain` | **Domain table**: domain, aliases, kind, certificate status (a colored badge with days to expiry), number of port forwards, and applied-on-all-edges. **Detail form:**<br>• **General:** domain, aliases, enabled, IP lists.<br>• **Certificate:** two `f.file` fields, the certificate chain and the private key (`Layer8FileUpload`, POST to `/0/FileStore`), plus the read-only summary (subject, SANs, issuer, expiry, fingerprint, status). The certificate can be downloaded; the private key can't.<br>• **Port forwarding:** `f.inlineTable('portForwards', …)` with listen port (and range end), protocol, mode, target kind, LB algorithm, number of healthy/total members, backend scheme, skip-verify (with a warning), PROXY v2, health type and path, and enabled. Clicking a port-forward row opens its detail in a stacked popup, with a **Load-balancing targets** inline table (host or IP, port, weight, enabled) and the DNS name or port for the other target kinds.<br>The `TUNNEL_BASE` row's port forwards are read-only | Same, as mobile cards: domain list, then detail with the certificate upload and port-forward cards (`Layer8MForms` file fields, `Layer8MEditTable`) | Validation errors from the callback (for example "certificate doesn't cover www.probler.dev" or "port 9092 is TCP on another domain") are shown on the form |
+| Edge ▸ Router ports | `EdgeNode` (listener status) | A read-only table of every public port the edge listens on: port or range, protocol, domains, and bound or error. This is the list of ports to forward on the home router | Same | Derived from the edge's report, so it shows what's really bound, not only what's configured |
 | Alerts ▸ Rules | `TunAlertRule` | CRUD; targets use `l8notify-target-editor.js` | Same | |
 | System | built-in | l8ui SYS: health, security (users and roles), modules, logs (L8Logs), data import; Events (`l8ui/events/`); Notify integrations and delivery log (`l8ui/notify/`) | Mobile SYS equivalents | |
 
 - **Registration:** reference registry entries for every Prime Object (the
-  token, route and relay pickers), and types registered in `go/tun/ui/main.go`.
+  token, domain and relay pickers), and types registered in `go/tun/ui/main.go`.
 - **Theming:** only `--layer8d-*` tokens, with `var(--layer8d-on-primary, white)`
   on primary backgrounds, and no project CSS using the l8ui alias names.
 - **No project code in l8ui** (L8UINoProjectSpecificCode). Custom behavior
@@ -704,8 +842,10 @@ project's own base image. `build.sh` in each binary's directory runs
   - a volume named `hdata` at `/data`
   - the same images, env, ports, Services, ConfigMaps (relay and edge
     bootstrap config) and Secrets
-    - Secrets are referenced but never committed: `l8tunnel-tls`,
-      `l8tunnel-agent-ca`, `l8tunnel-cluster`, `l8tunnel-oidc`.
+    - Secrets are referenced but never committed: `l8tunnel-agent-ca`,
+      `l8tunnel-cluster`, `l8tunnel-oidc`, and the optional first-start
+      `l8tunnel-tls`. Site and tunnel certificates are uploaded in the UI
+      (§3.1), not kept as Secrets.
     - `k8s/secrets.sh` creates them from files.
   - a NetworkPolicy for the relay's internal ports
   - a headless Service for the relays
@@ -750,7 +890,7 @@ constants. Users and roles are provisioned only through the Security API
 | 1 | `TunIssue` → `TunToken` | `gen_access_tokens.go`: 20 tokens through `TunIssue` (the only way to create one), with varied policies. Records `TunTokenIDs` | — |
 | 2 | `TunResv`, `TunGwKey` | `gen_access_resv.go`: reservations on token IDs. `gen_access_gwkeys.go`: generated ed25519 public keys with grants | `TunTokenIDs` |
 | 3 | `TunIssue` → `TunAgCert` | `gen_access_certs.go`: certificates for a subset of tokens | `TunTokenIDs` |
-| 4 | `EdgeRoute` | `gen_edge_routes.go`: routes in every mode and LB algorithm, pointing at `demo-*.invalid` backends | — |
+| 4 | `FileStore` → `EdgeDomain` | `gen_edge_domains.go`: 8 `SITE` domains with aliases. For each it generates a self-signed certificate and key for the domain (`demo-*.invalid`), uploads both through `/0/FileStore`, and stores the returned paths. It also creates port forwards in every protocol, mode, target kind and LB algorithm (target pools of 1–4 weighted members, some disabled), including one expired certificate and one expiring soon for the status badges | — |
 | 5 | `TunAlert` | `gen_alerts.go`: one rule per condition, with email and webhook targets | `TunTokenIDs` |
 | 6 | `TunRelay`, `EdgeNode` | `gen_live_relays.go`: 3 simulated relays and 1 simulated edge node (`simulated: true`, §5.3) | — |
 | 7 | `TunLive` | `gen_live_tunnels.go`: 40 simulated tunnels across the simulated relays and tokens, in every type and state (ACTIVE, GRACE) | phases 1 and 6 |
@@ -767,10 +907,15 @@ constants. Users and roles are provisioned only through the Security API
    --out export/` on k8s-node-2. It writes tokens (IDs, hashes, policies,
    certificate serials), reservations and gateway keys as JSON, plus the
    agent CA as PEM files (mode 0600).
-2. `k8s/secrets.sh` loads the TLS certificate, the agent CA and newly
-   generated cluster and OIDC keys.
+2. `k8s/secrets.sh` loads the agent CA and newly generated cluster and OIDC
+   keys. It optionally loads the TLS certificate as the first-start
+   `l8tunnel-tls`.
 3. Deploy, then import through `TunIssue IMPORT` (the UI's data-import page
    or `go/tun/tools/import`).
+   - In Edge ▸ Domains, upload the Porkbun `layer8-tunnel.info` bundle on the
+     `TUNNEL_BASE` row. The relays and the edge switch to it without a
+     restart.
+   - Add the `admin.layer8-tunnel.info` row (`443 → 5443`, LAN-only).
 4. `systemctl disable --now l8tunnel-server` on k8s-node-2, so the edge can
    bind 80/443. The ufw rules stay as they are.
 5. The agents (the laptop `x1` and the others) reconnect with the same
@@ -791,7 +936,7 @@ unchanged. Phase K7 checks this with the **already-built** agent packages
 | 2 | `tunnel/pipe` (bidirectional copy with half-close) | Edge L4 forwarding and relay-to-relay forwarding | Reuse as is |
 | 3 | `tunnel/relay/registry.go` (claim, park, reserve, ports, domains, grace) | `TunLive.Before()` enforces the same rules cluster-wide | **K0:** move the pure rules (conflict checks, port allocation, max_tunnels, grace math) into `tunnel/registry` functions that take state as arguments; the in-memory registry and the `TunLive` callback both call them |
 | 4 | `tunnel/store` (bbolt) and the admin API validation | The ORM callbacks validate the same objects | **K0:** keep validation in `auth` (policy, names, domain patterns, gateway grants); the admin API and the callbacks call it. The bbolt store becomes the standalone `relay.Accounts` |
-| 5 | `l8web/go/web/proxy` (about 440 lines): an SNI-based TLS-terminating reverse proxy | The edge TERMINATE mode covers the same job | **Assessed for porting (2026-09-25); not ported.** Findings:<br>• It only terminates TLS: no L4 passthrough, which RELAY and PASSTHROUGH need.<br>• One backend per domain (`NODE_IP:port`): no pools, health checks or retries.<br>• Routes are hardcoded in Go.<br>• It re-reads certificate files on every handshake, and unknown SNIs get the first route's certificate.<br>• Its catch-all handler builds a new proxy and transport per request, so there's no connection reuse.<br>• HTTP/1.1 only, with `InsecureSkipVerify` always on and no `X-Forwarded-*` headers.<br>• A hand-rolled WebSocket forwarder that ignores errors (the standard reverse proxy handles upgrades).<br>• No timeouts, a log line per request, and 502 for unknown hosts.<br>l8tunnel's `httpproxy` and `certs` already do this job better (§3.7), so reusing them is less work than porting and fixing.<br>**Taken from it:** its Kubernetes manifest (`proxy.yaml`, a hostNetwork DaemonSet) as a reference for the edge YAML, and its domain → port table as the seed list if the other sites move onto the edge (§12).<br>l8web itself isn't changed (FrameworkInterfaceBoundaries). It's flagged to the framework owner as a candidate to retire once the edge carries those sites |
+| 5 | `l8web/go/web/proxy` (about 440 lines): an SNI-based TLS-terminating reverse proxy | The edge TERMINATE mode covers the same job | **Assessed for porting (2026-09-25); not ported.** Findings:<br>• It only terminates TLS: no L4 passthrough, which RELAY and PASSTHROUGH need.<br>• One backend per domain (`NODE_IP:port`): no pools, health checks or retries.<br>• Routes are hardcoded in Go.<br>• It re-reads certificate files on every handshake, and unknown SNIs get the first route's certificate.<br>• Its catch-all handler builds a new proxy and transport per request, so there's no connection reuse.<br>• HTTP/1.1 only, with `InsecureSkipVerify` always on and no `X-Forwarded-*` headers.<br>• A hand-rolled WebSocket forwarder that ignores errors (the standard reverse proxy handles upgrades).<br>• No timeouts, a log line per request, and 502 for unknown hosts.<br>l8tunnel's `httpproxy` and `certs` already do this job better (§3.7), so reusing them is less work than porting and fixing.<br>**Taken from it:** its Kubernetes manifest (`proxy.yaml`, a hostNetwork DaemonSet) as a reference for the edge YAML, and its domain → port table as the first `EdgeDomain` rows and port forwards if the other sites move onto the edge (§3.1 example, §12).<br>l8web itself isn't changed (FrameworkInterfaceBoundaries). It's flagged to the framework owner as a candidate to retire once the edge carries those sites |
 | 5a | `tunnel/httpproxy` and `tunnel/certs` (the relay's HTTP termination and certificates) | The edge TERMINATE mode | **Reused (§3.7):** the edge pool implements `httpproxy.Tunnel`. Additions: 503 for no healthy member, `UpstreamTLS`, and `certs.ModeStaticSet`. No copy of either package |
 | 6 | Relay HTML error pages (`httpproxy/pages.go`) | The edge's 503 "no healthy backend" page | The edge imports `httpproxy`'s page renderer |
 | 7 | The request inspector UI (plain HTML, agent-side) | None: the agent's local tool, not the management app | Out of scope, unchanged |
@@ -822,13 +967,21 @@ when you ask.
   2. Change-notification subscription from a non-owner vnic.
   3. `common.GenerateID` semantics on a preset ID, for import.
   4. Vnet, web and log ports free on the shared cluster.
+  5. l8ui editing of a child list inside a child row (the `EdgeTarget` list
+     inside an `EdgePortForward` row) through a stacked popup, on desktop
+     and mobile. The fallback is a `targets` text field in
+     `host:port[×weight]` form, validated by the callback.
 - Record the outcomes in this plan before K1.
 
 **K1 — Model and management backend**
 
 - `proto/tun.proto` and bindings.
-- `go/tun/common`; the ORM services and callbacks (access, edge routes,
-  alerts); `TunIssue`; `EdgeNode`; the `simulated` flag and its rules.
+- `go/tun/common`; the ORM services and callbacks (access, edge domains
+  with port forwards and certificate validation, alerts); `TunIssue`;
+  `EdgeNode`; the `simulated` flag and its rules.
+- FileStore activated in the backend (the single owner, storage on
+  `/data/l8files`) and the FileStore permission rules; creating the
+  `TUNNEL_BASE` row at first start.
 - The security config JSON in l8secure, including the `relay`, `edge`,
   `registry` and `mock` service accounts; `go/tun/main` and `go/tun/vnet`.
 - Registering events and notify types.
@@ -844,25 +997,30 @@ when you ask.
   forwarding with HMAC.
 - Cross-relay takeover and grace; drain; cluster config and fail-fast checks
   (admin socket off, no ACME).
+- The relay loads the `TUNNEL_BASE` certificate from FileStore, reloads it
+  on change, and keeps a local copy (§4.1).
 - Relay events; the `export` command; `go/tun/relay/main.go`.
 
 **K3 — Edge**
 
-- `tunnel/edge`: listeners, route resolution (§3.2), modes RELAY,
-  PASSTHROUGH and TERMINATE. TERMINATE is built on `httpproxy` through
+- `tunnel/edge`: listeners derived from the domain table, opened and
+  closed live (§3.2); route resolution on shared ports (§3.3); modes RELAY,
+  PASSTHROUGH and TERMINATE; protocols TLS, HTTP and TCP. TERMINATE is built on `httpproxy` through
   `edge/pool.go` implementing `httpproxy.Tunnel` (§3.7).
 - `httpproxy` additions (503 for no healthy member, `UpstreamTLS`) and
   `certs.ModeStaticSet`, with the relay's existing tests still green.
 - Pools, LB algorithms, active and passive health, and retry before the
   first byte.
-- PROXY v2 writer, per-IP rate limits and route IP lists.
-- Route cache file, `EdgeNode` reporting, metrics and events;
+- PROXY v2 writer, per-IP rate limits and per-domain IP lists.
+- Certificate loading from FileStore into `certs.ModeStaticSet`, and the
+  domain and certificate cache.
+- `EdgeNode` reporting (listeners and backends), metrics and events;
   `go/tun/edge/main.go`.
 
 **K4 — Alerts and notifications**
 
-- The evaluator, the conditions in §5.5, cooldowns, and the certificate
-  expiry reported by relays.
+- The evaluator, the conditions in §5.5, cooldowns, certificate expiry from
+  every `EdgeDomain`, and listener failures.
 
 **K5 — Management UI**
 
@@ -895,6 +1053,19 @@ when you ask.
   - PROXY client IP reaching the IP lists and `X-Forwarded-For`
   - HMAC spoof refusal
   - the edge TERMINATE and PASSTHROUGH pools with health ejection
+  - Edge domains:
+    - a new port forward opens a listener, and deleting it closes one
+    - a port that can't bind is reported, not fatal
+    - two domains share 443 by SNI; a TCP port conflict is refused
+    - uploading a certificate that doesn't match or cover the domain is
+      refused
+    - a certificate replaced in the UI is served without a restart
+    - a private key can't be downloaded by operators or viewers
+  - Load balancing: the distribution matches the weights within ±5 % over
+    1,000 connections; a failed member is ejected and comes back; a disabled
+    member gets nothing; source hash keeps a client on one member; least
+    connections follows the active-connection counts; TERMINATE balances
+    per request over keep-alive connections
   - TERMINATE: h2 and WebSocket through the edge, connection reuse to the
     backend, upstream certificates verified by default, unknown SNI
     refused, and certificate reload after a Secret change
@@ -950,7 +1121,8 @@ Platforms:
 | 7 | §5.2 | `proto/tun.proto`, enums, List types, bindings | Go-mgmt | K1 |
 | 8 | §5.3 | TunToken, TunResv, TunGwKey, TunAgCert services and callbacks | Go-mgmt | K1 |
 | 9 | §5.3 | TunIssue (token, certificate, import) | Go-mgmt | K1 |
-| 10 | §5.3 | EdgeRoute and EdgeNode services; `simulated` flag rules | Go-mgmt | K1 |
+| 10 | §5.3 | EdgeDomain (port forwards, certificate validation via FileStore, TUNNEL_BASE row) and EdgeNode services; `simulated` flag rules | Go-mgmt | K1 |
+| 10a | §5.6 | FileStore activation in the backend; upload and download permissions (no key download for operators and viewers) | Go-mgmt | K1 |
 | 11 | §5.6 | Security config JSON, roles, deny rules, service accounts | Go-mgmt | K1 |
 | 12 | §5.4 | Events types registered; backend events | Go-mgmt | K1 |
 | 13 | §4.1 | Accounts over vnic with a snapshot; revocation propagation | Go-relay | K2 |
@@ -960,13 +1132,14 @@ Platforms:
 | 17 | §4.5 | Drain (UI and preStop), paced session close | Go-relay | K2 |
 | 18 | §4.6 | OIDC/custom-domain/admin-socket rules in cluster mode; fail-fast | Go-relay | K2 |
 | 19 | §7.5 | `l8tunnel-server export` | Standalone | K2 |
-| 20 | §3.1 | Edge listeners 443/80/port range/gateway | Go-edge | K3 |
-| 21 | §3.2 | Route resolution order, stale-table fallback | Go-edge | K3 |
-| 22 | §3.3 | RELAY, PASSTHROUGH, TERMINATE modes | Go-edge | K3 |
+| 20 | §3.2 | Listeners derived from port forwards, opened and closed live; bind failures reported; bootstrap TUNNEL_BASE ports | Go-edge | K3 |
+| 21 | §3.3 | Route resolution on shared TLS/HTTP ports, TCP ports by port, stale-table fallback | Go-edge | K3 |
+| 22 | §3.1 | RELAY, PASSTHROUGH, TERMINATE modes; TLS, HTTP, TCP protocols; target kinds | Go-edge | K3 |
 | 22a | §3.7 | TERMINATE on `httpproxy` (pool as `httpproxy.Tunnel`); `httpproxy` 503 and `UpstreamTLS`; `certs.ModeStaticSet` | Go-edge, Go-relay | K3 |
-| 23 | §3.4 | Pools, LB algorithms, active and passive health, retry | Go-edge | K3 |
-| 24 | §3.5 | PROXY v2 writer, edge rate limits, route IP lists | Go-edge | K3 |
-| 25 | §3.6 | Route cache, bootstrap config, EdgeNode reporting, metrics | Go-edge | K3 |
+| 23 | §3.4 | Per-port-forward pools of weighted `ip:port` targets; weighted round robin, least connections, consistent source hash, random; active and passive health, retry | Go-edge | K3 |
+| 24 | §3.5 | PROXY v2 writer, edge rate limits, per-domain IP lists | Go-edge | K3 |
+| 25 | §3.6 | Certificates from FileStore, domain and certificate cache, bootstrap config, EdgeNode reporting, metrics | Go-edge | K3 |
+| 25a | §4.1 | Relays serve the TUNNEL_BASE certificate from FileStore, with live reload | Go-relay | K2 |
 | 26 | §5.5 | Alert rules, evaluator, Notify().Send, cooldown | Go-mgmt | K4 |
 | 27 | §6 | Dashboard | Desktop | K5 |
 | 28 | §6 | Dashboard | Mobile | K5 |
@@ -974,8 +1147,8 @@ Platforms:
 | 30 | §6 | Tunnels (Live, Relays, Edge nodes) with actions | Mobile | K5 |
 | 31 | §6 | Access (Tokens + issue, Reservations, Gateway keys, Agent certs + issue) | Desktop | K5 |
 | 32 | §6 | Access (Tokens + issue, Reservations, Gateway keys, Agent certs + issue) | Mobile | K5 |
-| 33 | §6 | Edge ▸ Routes | Desktop | K5 |
-| 34 | §6 | Edge ▸ Routes | Mobile | K5 |
+| 33 | §6 | Edge ▸ Domains (table, certificate upload, port forwarding inline table) and Edge ▸ Router ports | Desktop | K5 |
+| 34 | §6 | Edge ▸ Domains (cards, certificate upload, port forwarding cards) and Edge ▸ Router ports | Mobile | K5 |
 | 35 | §6 | Alerts ▸ Rules | Desktop | K5 |
 | 36 | §6 | Alerts ▸ Rules | Mobile | K5 |
 | 37 | §6 | System, Events, Notify sections; login.json; reference registry | Desktop | K5 |
@@ -1003,7 +1176,7 @@ Platforms:
 | ACME in cluster mode (on-demand certificates for HTTP-terminated custom domains, automatic wildcard renewal) | Needs certmagic storage shared across relays, with locking. Today's deployment uses a static Porkbun wildcard, so nothing regresses | A certmagic `Storage` backed by a Layer 8 service, or a cert-manager Secret; `CERT_EXPIRING` alerts cover renewal until then |
 | Edge HA | The router forwards to one IP. HA needs a floating VIP and a router change | kube-vip/keepalived VIP on two edge nodes; the edge is already stateless apart from its cache |
 | Agent pools (one name, several agents, load-balanced) | New semantics for names and takeover | `TunLive` records per agent under one name, and a pick at the owner relays |
-| Moving the other Layer 8 sites (probler.dev, l8erp.one, ...) off `l8web` proxy | Not needed for l8tunnel; each move is an EdgeRoute entry | Add EdgeRoutes (TERMINATE, backends as today) once the edge is live |
+| Moving the other Layer 8 sites (probler.dev, l8erp.one, ...) off the `l8web` proxy | Not needed for l8tunnel. Each move is one `EdgeDomain` row with its certificate upload and port forwards (§3.1 example), done in the UI, with no code change | Add the rows once the edge is live, and forward each listed port on the router (Edge ▸ Router ports) |
 
 ## 13. Decisions I made for you (change any before approving)
 
@@ -1055,6 +1228,7 @@ Platforms:
 | K8sRules | §7.2; the rule's verify greps | K6 |
 | RunLocalScript | §7.3 | K6 |
 | MockDataRules | §7.4: generators for all 10 services in 7 dependency-ordered phases (live services through simulated records), endpoints `/tun/<area>/<ServiceName>`, users through area 73 | K6 |
+| FileUploadPattern | Certificate and key uploaded through `FileStore` and `Layer8FileUpload` (`f.file`); `EdgeDomain` stores only `*_storage_path`, `*_file_name`, `*_file_size`; no file I/O in callbacks (files fetched through FileStore over vnic); 5 MB limit is ample for PEM | K1, K5, K7 |
 | TestLocationAndApproach / CleanupTestBinaries | Tests only in `go/tests/`, through system APIs; built test binaries removed | K7 |
 | PostImplementationE2ETesting | `e2e/` Playwright on KIND, desktop and mobile, hygiene rules | K8 |
 | VerifyPrdCompletenessBeforeDone | Section-by-section walk in the K8 report | K8 |
@@ -1062,7 +1236,7 @@ Platforms:
 | PortalsSameWebServer | One UI server, one portal | K6 |
 | VendorAndGit | Dependencies only through `vendor.sh`; `go/vendor/` untracked; git only when asked | every phase |
 | NeverActOnQuestions | Followed | — |
-| Not applicable | L8Pollaris*, DataCompletenessPipeline, MoneyFieldTypeMapping, DateField pipeline beyond timestamps, FileUploadPattern, RegistrationPage (admins provision users), LoginableEntityUserProvisioning, L8AgentChat, Layer8CsvExport (optional, not planned), DemoDirectorySync, PlatformConversionDataFlow (no platform conversion) | — |
+| Not applicable | L8Pollaris*, DataCompletenessPipeline, MoneyFieldTypeMapping, DateField pipeline beyond timestamps, RegistrationPage (admins provision users), LoginableEntityUserProvisioning, L8AgentChat, Layer8CsvExport (optional, not planned), DemoDirectorySync, PlatformConversionDataFlow (no platform conversion) | — |
 
 **Also kept from the l8tunnel PRD §13.2:** no ignored errors, gofmt,
 `dist/` and `.pem` files never committed, and Secrets never committed.
