@@ -1520,3 +1520,47 @@ Docker or kubectl. It only runs the systemd relay and sshd.
   `../l8secure/build-images.sh l8tunnel amd64` from the security config
   `l8secure/go/secure/plugin/l8tunnel/l8tunnel.json`. That file is new in
   the l8secure repository and not committed there.
+
+### 16.10 K2 design decisions (2026-09-25)
+
+- **A claims engine instead of callbacks.** `tunnel/claims` is a
+  mutex-guarded engine in the registry. It serializes every claim, so two
+  relays can never hand out the same name, port or custom domain at once
+  (a service callback can't make its check and the write atomic).
+  - It reuses `tunnel/registry`'s rules.
+  - It has no framework dependencies, so it is tested in process.
+- **Relays write nothing directly.** They call the registry's `TunClaim`
+  action service: claim, park, release, announce, heartbeat, agent up and
+  agent down.
+  - The engine mirrors its state into `TunLive`, `TunAgent` and `TunRelay`,
+    which are read-only for clients and reconciled every 30 s.
+  - The UI's disconnect, drain and resume go through a second action
+    service, `TunCtl`. This replaces the planned DELETE and PATCH on the
+    live tables.
+- **`TunLiveTunnel` is keyed by tunnel name**, since names are unique
+  cluster-wide. `tunnel_id` stays as a field.
+  - New fields: `session_id` (takeover checks) and `access_token` (such
+    tunnels get no public port, and gateway keys need an explicit grant).
+- **Where the relay glue lives.** It is in `go/tun/relaynode`, not
+  `tunnel/cluster`, so the data-plane library (`go/tunnel/*`) keeps no
+  Layer 8 dependencies. The relay package defines a small `Cluster`
+  interface; nil means standalone.
+- **An unreachable registry doesn't stop agents.** Agents treat any refusal
+  as final, so a registry that stays unreachable for 10 s makes the relay
+  end the session instead of refusing. The agent reconnects with its normal
+  backoff.
+- **Cluster mode on the relay:**
+  - no per-port listeners: mode A traffic arrives on the stream port,
+    signed by the edge
+  - no local grace holds: the registry holds names cluster-wide
+  - the tunnel certificate comes from the TUNNEL_BASE domain through
+    FileStore, with live reload
+  - the SSH gateway host key comes from the `l8tunnel-cluster` Secret
+    (the same on every relay)
+- **KIND:**
+  - The relays run on the pod network (two replicas on one node) and reach
+    the vnet at `NODE_IP`.
+  - Per-relay NodePort Services let the tests reach each relay until the
+    edge exists (K3).
+  - `secrets.sh` also creates the `l8tunnel-cluster` Secret (forward key
+    and gateway host key) and never replaces it.

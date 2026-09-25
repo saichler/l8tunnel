@@ -13,7 +13,6 @@ import (
 // ClaimHandler serves TunClaim: every relay request goes to the engine.
 type ClaimHandler struct {
 	common.ActionStubs
-	engine *claims.Engine
 }
 
 func (h *ClaimHandler) Post(elems ifs.IElements, _ ifs.IVNic) ifs.IElements {
@@ -21,13 +20,12 @@ func (h *ClaimHandler) Post(elems ifs.IElements, _ ifs.IVNic) ifs.IElements {
 	if !ok {
 		return object.NewError("invalid TunClaimRequest")
 	}
-	return object.New(nil, h.engine.Handle(req))
+	return object.New(nil, h.Arg(0).(*claims.Engine).Handle(req))
 }
 
 // CtlHandler serves TunCtl: an operator's disconnect, drain or resume.
 type CtlHandler struct {
 	common.ActionStubs
-	engine *claims.Engine
 }
 
 func (h *CtlHandler) Post(elems ifs.IElements, _ ifs.IVNic) ifs.IElements {
@@ -35,14 +33,15 @@ func (h *CtlHandler) Post(elems ifs.IElements, _ ifs.IVNic) ifs.IElements {
 	if !ok {
 		return object.NewError("invalid TunCtlCommand")
 	}
-	if err := h.engine.Command(cmd); err != nil {
+	if err := h.Arg(0).(*claims.Engine).Command(cmd); err != nil {
 		return object.NewError(err.Error())
 	}
 	return object.New(nil, cmd)
 }
 
-func activateAction(vnic ifs.IVNic, handler ifs.IServiceHandler, name string, req, resp proto.Message) {
+func activateAction(vnic ifs.IVNic, handler ifs.IServiceHandler, engine *claims.Engine, name string, req, resp proto.Message) {
 	sla := ifs.NewServiceLevelAgreement(handler, name, common.AreaLive, false, nil)
+	sla.SetArgs(engine)
 	ws := web.New(name, common.AreaLive, 0)
 	ws.AddEndpoint(req, ifs.POST, resp)
 	sla.SetWebService(ws)

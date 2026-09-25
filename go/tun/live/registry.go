@@ -32,8 +32,8 @@ func Start(vnic ifs.IVNic) *Registry {
 		Rules:          common.Cluster().Rules(),
 		AllowSimulated: common.AllowSimulated(),
 	}, r.dir, &sink{views: r.views, vnic: vnic})
-	activateAction(vnic, &ClaimHandler{engine: r.Engine}, common.ClaimService, &tun.TunClaimRequest{}, &tun.TunClaimResponse{})
-	activateAction(vnic, &CtlHandler{engine: r.Engine}, common.CtlService, &tun.TunCtlCommand{}, &tun.TunCtlCommand{})
+	activateAction(vnic, &ClaimHandler{}, r.Engine, common.ClaimService, &tun.TunClaimRequest{}, &tun.TunClaimResponse{})
+	activateAction(vnic, &CtlHandler{}, r.Engine, common.CtlService, &tun.TunCtlCommand{}, &tun.TunCtlCommand{})
 	if err := r.dir.refresh(vnic); err != nil {
 		vnic.Resources().Logger().Warning("registry: management data not loaded yet: ", err.Error())
 	}

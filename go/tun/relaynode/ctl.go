@@ -17,11 +17,11 @@ const drainPace = 200 * time.Millisecond
 // the registry push changes and commands to it.
 type CtlHandler struct {
 	common.ActionStubs
-	node *Node
 }
 
 func (n *Node) activateCtl() {
-	sla := ifs.NewServiceLevelAgreement(&CtlHandler{node: n}, common.RelayCtlService, common.AreaLive, false, nil)
+	sla := ifs.NewServiceLevelAgreement(&CtlHandler{}, common.RelayCtlService, common.AreaLive, false, nil)
+	sla.SetArgs(n)
 	sla.SetWebService(web.New(common.RelayCtlService, common.AreaLive, 0))
 	if _, err := n.vnic.Resources().Services().Activate(sla, n.vnic); err != nil {
 		panic("activate " + common.RelayCtlService + ": " + err.Error())
@@ -36,8 +36,9 @@ func (h *CtlHandler) Delete(e ifs.IElements, _ ifs.IVNic) ifs.IElements {
 }
 
 func (h *CtlHandler) apply(action ifs.Action, elems ifs.IElements) ifs.IElements {
+	node := h.Arg(0).(*Node)
 	for _, e := range elems.Elements() {
-		h.node.handle(action, e)
+		node.handle(action, e)
 	}
 	return nil
 }

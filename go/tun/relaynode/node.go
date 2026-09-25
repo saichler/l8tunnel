@@ -59,11 +59,8 @@ func Run(ctx context.Context, vnic ifs.IVNic, version string, logger *slog.Logge
 	}
 	n.link = &link{vnic: vnic, relayID: n.relayID, key: key}
 	n.accounts = newAccounts(vnic, snapshotFile)
-	if err := n.accounts.refresh(); err != nil {
-		if lerr := n.accounts.load(); lerr != nil {
-			return fmt.Errorf("no agent credentials: backend unreachable (%v) and no snapshot (%v)", err, lerr)
-		}
-		logger.Warn("management backend unreachable; using the credentials snapshot", "error", err)
+	if err := n.loadAccounts(ctx, logger); err != nil {
+		return err
 	}
 	if err := n.loadCert(); err != nil {
 		logger.Warn("no tunnel certificate yet; TLS handshakes fail until one is uploaded", "error", err)
@@ -89,6 +86,28 @@ func Run(ctx context.Context, vnic ifs.IVNic, version string, logger *slog.Logge
 	<-ctx.Done()
 	n.srv.Drain(0)
 	return n.srv.Close()
+}
+
+// loadAccounts gets the agent credentials: from the backend, or the
+// snapshot when the backend is down. Without a snapshot it keeps trying
+// (a fresh cluster starts the backend and the relays together).
+func (n *Node) loadAccounts(ctx context.Context, logger *slog.Logger) error {
+	for {
+		err := n.accounts.refresh()
+		if err == nil {
+			return nil
+		}
+		if n.accounts.load() == nil {
+			logger.Warn("management backend unreachable; using the credentials snapshot", "error", err)
+			return nil
+		}
+		logger.Warn("waiting for the management backend", "error", err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
 }
 
 func (n *Node) relayConfig(logger *slog.Logger) (relay.Config, error) {
