@@ -58,7 +58,8 @@ home router forwards 80, 443 and 22000–22999 to that one machine. This plan:
    ═══════╪════════════════╪══════════ l8tunnel-vnet (Layer 8 overlay) ═══
           │                │       ┌──────────────────────────────────┐
           │                │       │ l8tunnel-registry (1 replica):   │
-          │                │       │ sole owner of TunLive, TunRelay  │
+          │                │       │ sole owner of TunLive, TunAgent, │
+          │                │       │ TunRelay                         │
           │                │       └──────────────────────────────────┘
    ┌──────┴────────────────┴───────────────────────────────────────────┐
    │ Management plane                                                   │
@@ -76,7 +77,7 @@ home router forwards 80, 443 and 22000–22999 to that one machine. This plan:
   PATCH, DELETE) and service change notifications (`IServiceCacheListener`)
   over the vnet.
 - Every in-memory service also has exactly one owner process. The live
-  tables (`TunLive`, `TunRelay`) are owned by a dedicated single-replica
+  tables (`TunLive`, `TunAgent`, `TunRelay`) are owned by a dedicated single-replica
   **registry** process, not by the relays (§4.2).
 - All users, roles and permissions go through `ISecurityProvider` (l8secure,
   loaded as a plugin). The relays and the edge join the vnet with
@@ -101,7 +102,7 @@ home router forwards 80, 443 and 22000–22999 to that one machine. This plan:
 |---|---|---|---|
 | Edge | `go/tun/edge` → `saichler/l8tunnel-edge` | hostNetwork, pinned to the router's target node | Listeners derived from the domain table, routing, load balancing, health checks, PROXY v2 to backends |
 | Relay | `go/tun/relay` → `saichler/l8tunnel-relay` | 2+ replicas, pod network, no host ports | The existing relay in **cluster mode**: agent sessions, tunnel serving, HTTP termination, OIDC, SSH gateway |
-| Registry | `go/tun/registry` → `saichler/l8tunnel-registry` | StatefulSet, 1 replica | The single owner of the in-memory live services `TunLive` and `TunRelay`: cluster-wide name, port and domain claims. No database |
+| Registry | `go/tun/registry` → `saichler/l8tunnel-registry` | StatefulSet, 1 replica | The single owner of the in-memory live services `TunLive`, `TunAgent` and `TunRelay`: cluster-wide name, port and domain claims. No database |
 | Backend | `go/tun/main` → `saichler/l8tunnel` | StatefulSet (Postgres base image) | ORM services, the issuing service, `EdgeNode`, alert evaluation |
 | Web UI | `go/tun/ui` → `saichler/l8tunnel-web` | DaemonSet, hostNetwork | l8web server with l8ui, desktop `app.html` and mobile `m/app.html` |
 | Vnet | `go/tun/vnet` → `saichler/l8tunnel-vnet` | DaemonSet, hostNetwork | Layer 8 overlay switch |
@@ -429,6 +430,41 @@ validation code.
   registry moves its records to `GRACE`. Its agents reconnect through the
   edge to other relays and reclaim their names.
 
+### 4.2a Agent records (`TunAgent`)
+
+One record per agent, keyed by the agent ID, beside the per-tunnel
+`TunLiveTunnel` records. It's owned by the registry like them.
+
+- **Created at login.** When an agent's session is authenticated, its relay
+  POSTs (or replaces, on takeover) the `TunAgent` record with:
+  - from the `Hello` message the agent already sends: agent ID, version, OS
+    and architecture
+  - how it authenticated: the token ID and name, or the agent-certificate
+    serial
+  - session details: session ID, public IP (from PROXY v2), relay ID,
+    transport (TLS, WebSocket, or WebSocket through an HTTP proxy), and
+    connected-since
+- **Heartbeats.** The relay PATCHes the agent's heartbeat data (the last
+  heartbeat time and the round-trip time it already measures with
+  Ping/Pong), tunnel count, active streams and bytes, together with its own
+  5 s `TunRelay` heartbeat. That's one batched update per relay, not one per
+  agent.
+- **State:**
+  - `ONLINE`
+  - `GRACE`: the session dropped and its names are held, until `grace_until`
+  - `OFFLINE`: kept with `last_seen` and the last disconnect reason
+    (heartbeat timeout, revoked token, relay drained or lost, takeover, or
+    closed by the agent) for 24 hours, then removed. Agent history beyond
+    that comes from the session events (§5.4).
+- **Disconnect.** `DELETE` from the UI disconnects the agent: the owning
+  relay closes the whole session, including all its tunnels. The agent
+  reconnects by itself unless its token was revoked. A disconnect button,
+  not revocation, is what operators need for a stuck agent.
+- **Rebuilt on restart.** The registry's re-announce (§4.2) covers
+  `TunAgent` too: relays re-POST their agents before their tunnels.
+- **No new wire protocol.** Everything comes from data the relay already
+  has.
+
 ### 4.3 Relay listeners in cluster mode (pod network, unprivileged)
 
 | Port | Traffic | Notes |
@@ -504,6 +540,7 @@ go/tun/
 ├── edge/domains/         EdgeDomainService.go, ...Callback.go (certificate validation via FileStore)
 ├── edge/nodes/           EdgeNodeService.go (in-memory, TTL)
 ├── live/tunnels/         TunLiveService.go, ...Callback.go (in-memory, activated only by the registry)
+├── live/agents/          TunAgentService.go, ...Callback.go (in-memory, activated only by the registry)
 ├── live/relays/          TunRelayService.go (in-memory, activated only by the registry)
 ├── alerts/               TunAlertService.go, ...Callback.go, evaluator.go
 ├── main/  registry/  vnet/  relay/  edge/  log-vnet/  log-agent/     # main.go each (minimal)
@@ -529,6 +566,7 @@ ServiceName ≤ 10 characters; one ServiceArea per module.
 | system (0) | `FileStore` (l8services, not project code) | uploaded certificate and key files | `storagePath` | encrypted files on `/data/l8files` | backend |
 | edge (41) | `EdgeNode` | `EdgeNode` | `edgeId` | in-memory, TTL | backend |
 | live (42) | `TunLive` | `TunLiveTunnel` | `tunnelId` | in-memory | registry (§4.2) |
+| live (42) | `TunAgent` | `TunAgent` | `agentId` | in-memory | registry (§4.2a) |
 | live (42) | `TunRelay` | `TunRelay` | `relayId` | in-memory | registry |
 | alerts (43) | `TunAlert` | `TunAlertRule` | `ruleId` | ORM | backend |
 
@@ -542,7 +580,8 @@ generator of their own):
 - `EdgeBackendStatus` in `EdgeNode`
 
 **References between Prime Objects** are ID strings only, for example
-`TunLiveTunnel.tokenId`, `TunLiveTunnel.relayId`, `TunAgentCert.tokenId` and
+`TunLiveTunnel.tokenId`, `TunLiveTunnel.relayId`, `TunLiveTunnel.agentId`,
+`TunAgent.tokenId`, `TunAgent.relayId`, `TunAgentCert.tokenId` and
 `TunReservation.tokenId`.
 
 **`TunAlertRule.targets`** embeds the shared `l8notify.NotifyTarget` type.
@@ -552,6 +591,7 @@ generator of their own):
 - Every enum starts with `*_UNSPECIFIED = 0`. The enums: `TunTunnelType`,
   `EdgeDomainKind`, `EdgeCertStatus`, `EdgeProtocol`, `EdgeForwardMode`,
   `EdgeTargetKind`, `EdgeBackendScheme`, `EdgeLbAlgorithm`, `EdgeHealthType`, `TunRelayState`,
+  `TunAgentState`, `TunAgentTransport`, `TunDisconnectReason`,
   `TunLiveState`, `TunAlertCondition` and `TunIssueKind`.
 - Every `XxxList` type has `repeated Xxx list = 1; l8api.L8MetaData metadata = 2;`.
 - Bindings are generated only through `proto/make-bindings.sh` (`docker run -i`).
@@ -608,7 +648,7 @@ Plaintext secrets never reach the ORM or the event log.
     report back, so the UI shows whether each edge has applied it.
   - **Events.** Certificate uploads and replacements post events. The
     certificate summary feeds `CERT_EXPIRING` (§5.5).
-- **`TunLive`, `TunRelay`, `EdgeNode` and simulated records:**
+- **`TunLive`, `TunAgent`, `TunRelay`, `EdgeNode` and simulated records:**
   - Each type has a `simulated` boolean. Only the `mock` service account
     may set it (the security config enforces this).
   - Simulated records are exempt from heartbeat expiry, never take part in
@@ -622,6 +662,10 @@ Plaintext secrets never reach the ORM or the event log.
   - `DELETE` from the UI means "disconnect": the owning relay closes that
     tunnel.
   - Relays PATCH their counters.
+- **`TunAgent`:** only relays POST and PATCH (§4.2a). `DELETE` from the UI
+  disconnects the agent, and posts an event naming the user who did it. The
+  registry's cleanup moves records to `OFFLINE` and removes them after
+  24 hours.
 - **`TunRelay`:** relays PATCH their heartbeat, state and counters. A UI
   PATCH of `state` to `DRAINING` starts a drain.
 
@@ -653,9 +697,12 @@ The project never activates `Events` itself (l8common does), and the UI
     (`EdgeDomain.cert_not_after`). The tunnel wildcard currently expires on
     Dec 24, 2026.
   - `EDGE_LISTENER_FAILED` (a port forward's listener couldn't bind)
-  - `TOKEN_OFFLINE` (all of a token's agents gone for longer than N minutes)
+  - `TOKEN_OFFLINE` (all of a token's `TunAgent` records `OFFLINE` for
+    longer than N minutes)
+  - `AGENT_OFFLINE` (a specific agent ID offline for longer than N minutes,
+    for important machines)
 - The backend's `alerts/evaluator.go` subscribes to `TunRelay`, `EdgeNode`,
-  `EdgeDomain` and `TunLive`. When a condition matches it sends through
+  `EdgeDomain`, `TunAgent` and `TunLive`. When a condition matches it sends through
   `vnic.Resources().Notify().Send(...)` to each target, with a per-rule
   cooldown.
 - Deliveries appear in the shared delivery log. There's no project SMTP or
@@ -675,7 +722,7 @@ The project never activates `Events` itself (l8common does), and the UI
   - `viewer`: read-only
   - `relay` (service account): read `TunToken` including `secretHash`; read
     reservations, gateway keys, certificates and edge domains; download the
-    `TUNNEL_BASE` certificate and key from FileStore; write `TunLive` and
+    `TUNNEL_BASE` certificate and key from FileStore; write `TunLive`, `TunAgent` and
     `TunRelay`
   - `edge` (service account): read edge domains, `TunLive` and `TunRelay`;
     download certificates and keys from FileStore; write
@@ -774,8 +821,9 @@ section is config, enums, columns, forms and init, and init calls
 
 | Section | Services | Desktop | Mobile | Notes |
 |---|---|---|---|---|
-| Dashboard | TunRelay, TunLive, EdgeNode | Layer8DWidget KPIs: ready relays, agents online, tunnels by type, unhealthy backends, days to certificate expiry | Mobile widgets | KPI counts query `page 0` (L8QL gotcha) |
-| Tunnels ▸ Live | `TunLiveTunnel` | Layer8DTable `realtime`, read-only view form, **Disconnect** action | Layer8MTable, read-only card | Immutable, so read-only UI (ImmutabilityUiAlignment) |
+| Dashboard | TunRelay, TunAgent, TunLive, EdgeNode | Layer8DWidget KPIs: ready relays, agents online (from `TunAgent`), agents offline in the last 24 h, tunnels by type, unhealthy backends, days to certificate expiry | Mobile widgets | KPI counts query `page 0` (L8QL gotcha) |
+| Tunnels ▸ Agents | `TunAgent` | **Agent status screen**: a Layer8DTable in `realtime` mode with state badge (online, grace, offline), agent ID, token or certificate, version, OS and architecture, public IP, relay, transport, connected-since or last-seen, heartbeat RTT, and tunnel count. Filters by state, token and relay. The read-only detail adds the disconnect reason, bytes and streams, and the agent's **tunnels** as a read-only table (`TunLiveTunnel where agentId=…`). Actions: **Disconnect agent** (with confirmation), and **Open token** | Layer8MTable cards with the same fields, detail and actions | Immutable, so read-only apart from the actions (ImmutabilityUiAlignment). A version column highlights agents older than the relay's version |
+| Tunnels ▸ Live | `TunLiveTunnel` | Layer8DTable `realtime`, read-only view form, the agent ID as a link to its agent row, **Disconnect** action | Layer8MTable, read-only card | Immutable, so read-only UI (ImmutabilityUiAlignment) |
 | Tunnels ▸ Relays | `TunRelay` | Table (realtime), **Drain / Resume** actions | Same | Read-only apart from the state action |
 | Tunnels ▸ Edge nodes | `EdgeNode` | Table; listener status and backend health as read-only inline tables | Same | |
 | Access ▸ Tokens | `TunToken` | CRUD; the policy as form sections with an inline table for port ranges; **Issue token** runs a custom handler that POSTs to `TunIssue` and shows the token once, with copy | Same (mobile form and confirm) | `secretHash` never shown |
@@ -893,7 +941,8 @@ constants. Users and roles are provisioned only through the Security API
 | 4 | `FileStore` → `EdgeDomain` | `gen_edge_domains.go`: 8 `SITE` domains with aliases. For each it generates a self-signed certificate and key for the domain (`demo-*.invalid`), uploads both through `/0/FileStore`, and stores the returned paths. It also creates port forwards in every protocol, mode, target kind and LB algorithm (target pools of 1–4 weighted members, some disabled), including one expired certificate and one expiring soon for the status badges | — |
 | 5 | `TunAlert` | `gen_alerts.go`: one rule per condition, with email and webhook targets | `TunTokenIDs` |
 | 6 | `TunRelay`, `EdgeNode` | `gen_live_relays.go`: 3 simulated relays and 1 simulated edge node (`simulated: true`, §5.3) | — |
-| 7 | `TunLive` | `gen_live_tunnels.go`: 40 simulated tunnels across the simulated relays and tokens, in every type and state (ACTIVE, GRACE) | phases 1 and 6 |
+| 7 | `TunAgent` | `gen_live_agents.go`: 25 simulated agents across the simulated relays and tokens, in every state (ONLINE, GRACE, OFFLINE with each disconnect reason), transport, OS and architecture, and a few older versions. Records `TunAgentIDs` | phases 1 and 6 |
+| 8 | `TunLive` | `gen_live_tunnels.go`: 40 simulated tunnels on the simulated agents (1–3 each), in every type and state (ACTIVE, GRACE) | phases 1, 6 and 7 |
 
 - **Distributions** follow the mock-data rules' patterns: the first 60%
   ACTIVE and the next 20% GRACE, cycling after that.
@@ -991,7 +1040,8 @@ when you ask.
 - `tunnel/cluster`: `Accounts` over vnic with a snapshot, and `Registry` over
   `TunLive`.
 - The registry process (`go/tun/registry`) as the single owner of
-  `TunLive`/`TunRelay`; heartbeats, lost-relay cleanup, and re-announce
+  `TunLive`/`TunAgent`/`TunRelay`; heartbeats, lost-relay cleanup, agent
+  records with batched heartbeat updates and the 24 h offline retention, and re-announce
   after a registry restart.
 - Internal listeners 8443, 8080 and 8444 with PROXY v2 and TLVs; relay-to-relay
   forwarding with HMAC.
@@ -1025,7 +1075,8 @@ when you ask.
 **K5 — Management UI**
 
 - The desktop and mobile sections in §6, dashboard, realtime tables, the
-  show-once handlers, Drain / Disconnect actions, and the SYS, Events and
+  show-once handlers, the agent status screen (Tunnels ▸ Agents), Drain /
+  Disconnect actions, and the SYS, Events and
   Notify sections.
 - `login.json`, the reference registry, and verifying the script order.
 
@@ -1035,7 +1086,7 @@ when you ask.
   four k8s modes, the KIND scripts, `deploy.sh`/`undeploy.sh`, `secrets.sh`,
   `label-edge.sh`.
 - `log-vnet` and `log-agent`, `run-local.sh`, and the `go/tests/mocks`
-  generators for all 10 services in 7 phases (§7.4), including simulated
+  generators for all 11 services in 8 phases (§7.4), including simulated agents,
   relays, edge nodes and tunnels.
 - Import tool; PRD and README updates.
 
@@ -1071,6 +1122,11 @@ when you ask.
     refused, and certificate reload after a Secret change
   - management-plane-down resilience
   - registry restart: re-announce, no dropped tunnels, and claims resuming
+  - agent records: version, OS, transport and IP (through the edge) match
+    the real agent; the RTT updates; takeover on another relay moves the
+    record; each disconnect reason is recorded; offline records expire;
+    Disconnect agent closes every tunnel of the session and the agent
+    reconnects
   - simulated records never routed to
   - the §5.7 separation: an agent token refused by the management API, a
     management bearer token refused as an agent credential
@@ -1126,7 +1182,8 @@ Platforms:
 | 11 | §5.6 | Security config JSON, roles, deny rules, service accounts | Go-mgmt | K1 |
 | 12 | §5.4 | Events types registered; backend events | Go-mgmt | K1 |
 | 13 | §4.1 | Accounts over vnic with a snapshot; revocation propagation | Go-relay | K2 |
-| 14 | §4.2 | Registry as single owner of TunLive/TunRelay: claims, port allocation, takeover, grace, lost relay, re-announce | Go-relay | K2 |
+| 14 | §4.2 | Registry as single owner of TunLive/TunAgent/TunRelay: claims, port allocation, takeover, grace, lost relay, re-announce | Go-relay | K2 |
+| 14a | §4.2a | TunAgent records: login data, batched heartbeats, states and disconnect reasons, 24 h offline retention, disconnect-agent action | Go-relay, Go-mgmt | K2 |
 | 15 | §4.3 | Internal listeners 8443/8080/8444 | Go-relay | K2 |
 | 16 | §4.4 | Relay-to-relay forwarding with TLV + HMAC, no second hop | Go-relay | K2 |
 | 17 | §4.5 | Drain (UI and preStop), paced session close | Go-relay | K2 |
@@ -1143,8 +1200,8 @@ Platforms:
 | 26 | §5.5 | Alert rules, evaluator, Notify().Send, cooldown | Go-mgmt | K4 |
 | 27 | §6 | Dashboard | Desktop | K5 |
 | 28 | §6 | Dashboard | Mobile | K5 |
-| 29 | §6 | Tunnels (Live, Relays, Edge nodes) with actions | Desktop | K5 |
-| 30 | §6 | Tunnels (Live, Relays, Edge nodes) with actions | Mobile | K5 |
+| 29 | §6 | Tunnels (Agents status screen, Live, Relays, Edge nodes) with actions | Desktop | K5 |
+| 30 | §6 | Tunnels (Agents status screen, Live, Relays, Edge nodes) with actions | Mobile | K5 |
 | 31 | §6 | Access (Tokens + issue, Reservations, Gateway keys, Agent certs + issue) | Desktop | K5 |
 | 32 | §6 | Access (Tokens + issue, Reservations, Gateway keys, Agent certs + issue) | Mobile | K5 |
 | 33 | §6 | Edge ▸ Domains (table, certificate upload, port forwarding inline table) and Edge ▸ Router ports | Desktop | K5 |
@@ -1157,7 +1214,7 @@ Platforms:
 | 40 | §7.2 | Four k8s modes, KIND scripts, deploy/undeploy, secrets.sh, label-edge.sh | K8s | K6 |
 | 41 | §7.1 | log-vnet and log-agent binaries, images, YAML entries | K8s | K6 |
 | 42 | §7.3 | run-local.sh, PRD "Local Development Setup" | Go-mgmt | K6 |
-| 43 | §7.4 | Mock generators for all 10 services (7 phases, simulated live records) + demo agent | Go-mgmt | K6 |
+| 43 | §7.4 | Mock generators for all 11 services (8 phases, simulated live records) + demo agent | Go-mgmt | K6 |
 | 44 | §7.5 | Import tool | Go-mgmt | K6 |
 | 45 | §10 | Go end-to-end cluster tests | Go-edge, Go-relay, Go-mgmt | K7 |
 | 46 | §8 | Old agent packages against the cluster | Go-relay | K7 |
@@ -1210,7 +1267,7 @@ Platforms:
 | EnumRendererColumnCascade / JsProtobufFieldNames / SharedComponentsReference | Enum factory, renderers and column factory for every enum; camelCase JSON names | K5 |
 | ReferenceRegistryCompleteness | Registry entries for every Prime Object | K5 grep |
 | InlinePopupRenderingParity / StackedPopupDomScoping | Show-once popups through Layer8DPopup / Layer8MPopup | K5, K8 |
-| ImmutabilityUiAlignment | `TunLiveTunnel`, `TunRelay`, `EdgeNode` read-only in the UI (actions only) | K5 |
+| ImmutabilityUiAlignment | `TunLiveTunnel`, `TunAgent`, `TunRelay`, `EdgeNode` read-only in the UI (actions only) | K5 |
 | Layer8DTablePaginationMetadata / L8QueryRules | Counts on `page 0`; every GET with L8Query; `select *` for detail popups | K5 |
 | SpecialCases (read-only services, custom handlers) | Live services read-only; Issue as custom handlers | K5 |
 | ProtobufRules | UNSPECIFIED zero values, `list=1`/`metadata=2`, type names in JS, `make-bindings.sh` with `-i` | K1 grep |
@@ -1219,7 +1276,7 @@ Platforms:
 | MainPackageMinimal | Each `main.go` only wires resources, vnic, Activate and waits | K7 review |
 | NoGoGenerics | None | K7 grep |
 | FrameworkInterfaceBoundaries | No changes to `l8types/go/ifs`; existing extension points (ServiceCallback, IServiceCacheListener) | K7 review |
-| SingleOwnerDatabaseTable | Every service has exactly one owner process (§5.2): ORM services in the backend; `TunLive`/`TunRelay` in the registry; `EdgeNode` in the backend. Relays, edge and UI only use vnic | K7 grep for `Activate` per `main.go` |
+| SingleOwnerDatabaseTable | Every service has exactly one owner process (§5.2): ORM services in the backend; `TunLive`/`TunAgent`/`TunRelay` in the registry; `EdgeNode` in the backend. Relays, edge and UI only use vnic | K7 grep for `Activate` per `main.go` |
 | SecurityRules / SecurityConfigStructure / AssociateIdsScopeView | Management plane: ISecurityProvider only; config JSON in l8secure; users via area 73; no l8secure import; field deny for `secretHash`. Data plane: §5.7 boundary, exceptions X-1 and X-2, both approved (§15) | K1, K7 grep and separation tests |
 | EventsServiceRequired | Never activated by the project; `EventRecord` registered; events §5.4 | K1, K7 grep |
 | NotifyServiceRequired | `Notify().Send` only; types registered; no `net/smtp` or Slack code | K4, K7 grep |
@@ -1227,7 +1284,7 @@ Platforms:
 | DeploymentArtifacts | §7.1; every new image on the own `-security`/`-postgres` base images; standalone images are exception X-5 | K6 |
 | K8sRules | §7.2; the rule's verify greps | K6 |
 | RunLocalScript | §7.3 | K6 |
-| MockDataRules | §7.4: generators for all 10 services in 7 dependency-ordered phases (live services through simulated records), endpoints `/tun/<area>/<ServiceName>`, users through area 73 | K6 |
+| MockDataRules | §7.4: generators for all 11 services in 8 dependency-ordered phases (live services through simulated records), endpoints `/tun/<area>/<ServiceName>`, users through area 73 | K6 |
 | FileUploadPattern | Certificate and key uploaded through `FileStore` and `Layer8FileUpload` (`f.file`); `EdgeDomain` stores only `*_storage_path`, `*_file_name`, `*_file_size`; no file I/O in callbacks (files fetched through FileStore over vnic); 5 MB limit is ample for PEM | K1, K5, K7 |
 | TestLocationAndApproach / CleanupTestBinaries | Tests only in `go/tests/`, through system APIs; built test binaries removed | K7 |
 | PostImplementationE2ETesting | `e2e/` Playwright on KIND, desktop and mobile, hygiene rules | K8 |
@@ -1250,7 +1307,7 @@ Everything not listed here complies.
 |---|---|---|---|---|---|
 | X-1 | SecurityRules (all AAA through `ISecurityProvider`) | Agent ↔ relay authentication (agent tokens and mTLS agent certificates) is done by the relay, not `ISecurityProvider` | `go/tunnel/auth`, the relay's control path | A wire-protocol credential for machines, checked on the hot path and needed while the management plane is down. Issuing and revoking these credentials stays under `ISecurityProvider` (§5.7) | **Approved by you** (2026-09-25) |
 | X-2 | SecurityRules | Tunnel-visitor access control (IP lists, basic auth, OIDC login cookies, SSH access tokens) and SSH gateway keys are done by the relay | `go/tunnel/auth`, `oidc`, `httpproxy`, the relay gateway | Anonymous internet clients of the operator's customers, not Layer 8 users; the policies come from the tunnel owner's `Register` message. Bounded as in §5.7 | **Approved by you** (2026-09-25, covered by the X-1 waiver) |
-| X-3 | SingleOwnerDatabaseTable, intent | None any more: `TunLive`/`TunRelay` now have one owner, the registry (§4.2) | — | Resolved by design | Resolved |
+| X-3 | SingleOwnerDatabaseTable, intent | None any more: `TunLive`/`TunAgent`/`TunRelay` now have one owner, the registry (§4.2) | — | Resolved by design | Resolved |
 | X-4 | PrdCompliance (l8erp layout) | The existing `go/cmd/*` binaries and `go/tunnel/*` packages keep their layout; only new code follows `go/tun/…` | Existing standalone and data-plane code | They are the standalone product and the shared data-plane library, built by the release tarballs, the Dockerfile and the install packages; moving them would break those for no gain | **Approved by you** (2026-09-25) |
 | X-5 | DeploymentArtifacts (own `-security`/`-postgres` base images) | The root `Dockerfile`'s standalone `server`/`agent` images stay distroless | Standalone images only | They never join a vnet or load a security plugin, and aren't part of any Kubernetes deployment in this plan. Every new image uses the base images | **Approved by you** (2026-09-25) |
 
