@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -239,5 +240,38 @@ func TestStorePersistsAndLocks(t *testing.T) {
 	}
 	if list, _ := st.Reservations(); len(list) != 0 {
 		t.Fatalf("reservations survived their token: %+v", list)
+	}
+}
+
+func TestAdminExportForKubernetes(t *testing.T) {
+	env := startRelay(t, 2)
+	socket := startAdmin(t, env)
+	mustAdmin(t, socket, "reservation", "add", "--name", "kept", "--token", "test", "--port", strconv.Itoa(env.portMin))
+	dir := filepath.Join(t.TempDir(), "export")
+	out := mustAdmin(t, socket, "export", "--out", dir)
+	if !strings.Contains(out, "exported 2 tokens, 1 reservations") {
+		t.Fatalf("export output: %s", out)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "export.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exp, err := store.ParseExport(data)
+	if err != nil || len(exp.Tokens) != 2 || exp.Reservations[0].Name != "kept" || len(exp.Tokens[0].Hash) == 0 {
+		t.Fatalf("export %+v %v", exp, err)
+	}
+	for _, f := range []string{"export.json", "ca.crt", "ca.key"} {
+		info, err := os.Stat(filepath.Join(dir, f))
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s: %v %v", f, info, err)
+		}
+	}
+	certPEM, _ := os.ReadFile(filepath.Join(dir, "ca.crt"))
+	keyPEM, _ := os.ReadFile(filepath.Join(dir, "ca.key"))
+	if _, err := auth.LoadAgentCA(certPEM, keyPEM); err != nil {
+		t.Fatalf("exported agent CA: %v", err)
+	}
+	if _, err := adminCmd(t, socket, "export", "--out", dir); err == nil {
+		t.Fatal("a second export overwrote the files")
 	}
 }

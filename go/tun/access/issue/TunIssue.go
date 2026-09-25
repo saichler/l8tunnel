@@ -20,7 +20,7 @@ const (
 // IssueHandler serves TunIssue. It isn't named after a proto message: the
 // framework's registry creates handlers by bare struct name.
 type IssueHandler struct {
-	sla *ifs.ServiceLevelAgreement
+	common.ActionStubs
 }
 
 // Activate activates the stateless service; only the backend calls it.
@@ -32,21 +32,4 @@ func Activate(vnic ifs.IVNic) {
 	if _, err := vnic.Resources().Services().Activate(sla, vnic); err != nil {
 		panic("activate " + ServiceName + ": " + err.Error())
 	}
-}
-
-func (h *IssueHandler) Activate(sla *ifs.ServiceLevelAgreement, _ ifs.IVNic) error {
-	h.sla = sla
-	return nil
-}
-
-func (h *IssueHandler) DeActivate() error {
-	return nil
-}
-
-func (h *IssueHandler) TransactionConfig() ifs.ITransactionConfig {
-	return nil
-}
-
-func (h *IssueHandler) WebService() ifs.IWebService {
-	return h.sla.WebService()
 }

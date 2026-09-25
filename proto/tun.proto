@@ -155,6 +155,27 @@ enum TunCtlCommandKind {
   TUN_CTL_COMMAND_KIND_TAKEN_OVER = 6;         // the agent reconnected elsewhere
 }
 
+enum TunClaimKind {
+  TUN_CLAIM_KIND_UNSPECIFIED = 0;
+  TUN_CLAIM_KIND_CLAIM = 1;       // register tunnels (all or nothing)
+  TUN_CLAIM_KIND_PARK = 2;        // a session ended: hold its names for the grace period
+  TUN_CLAIM_KIND_RELEASE = 3;     // free names now (tunnel closed, token revoked)
+  TUN_CLAIM_KIND_ANNOUNCE = 4;    // a relay's full state (registry or relay restart)
+  TUN_CLAIM_KIND_HEARTBEAT = 5;   // relay, agent and tunnel counters
+  TUN_CLAIM_KIND_AGENT_UP = 6;    // an agent session authenticated
+  TUN_CLAIM_KIND_AGENT_DOWN = 7;  // an agent session ended
+}
+
+enum TunClaimError {
+  TUN_CLAIM_ERROR_UNSPECIFIED = 0;  // no error
+  TUN_CLAIM_ERROR_NAME_TAKEN = 1;
+  TUN_CLAIM_ERROR_MAX_TUNNELS = 2;
+  TUN_CLAIM_ERROR_PORT_UNAVAILABLE = 3;
+  TUN_CLAIM_ERROR_PORT_NOT_ALLOWED = 4;
+  TUN_CLAIM_ERROR_FORBIDDEN = 5;
+  TUN_CLAIM_ERROR_INVALID = 6;
+}
+
 // ============================================================================
 // Access (service area 40)
 // ============================================================================
@@ -452,6 +473,8 @@ message TunLiveTunnel {
   int64 bytes_in = 15;
   int64 bytes_out = 16;
   bool simulated = 17;
+  string session_id = 18;
+  bool access_token = 19;  // reachable only with an access token (no public port)
 }
 
 message TunLiveTunnelList {
@@ -467,6 +490,37 @@ message TunCtlCommand {
   string agent_id = 3;
   string tunnel_id = 4;
   string requested_by = 5;
+}
+
+// TunClaimRequest is a relay's request to the registry's claims engine
+// (the TunClaim action service). Relays never write the live tables
+// directly: the engine serializes every claim, so two relays can't take the
+// same name or port at once.
+message TunClaimRequest {
+  TunClaimKind kind = 1;
+  string relay_id = 2;
+  string session_id = 3;
+  string agent_id = 4;
+  string token_id = 5;
+  int32 max_tunnels = 6;              // the token's cap (0 = none)
+  int32 port_min = 7;                 // the token's allowed range, narrowed to the relay's
+  int32 port_max = 8;
+  repeated TunLiveTunnel tunnels = 9; // CLAIM, ANNOUNCE, HEARTBEAT
+  repeated string names = 10;         // PARK, RELEASE
+  int64 grace_until = 11;             // PARK
+  TunAgent agent = 12;                // AGENT_UP
+  repeated TunAgent agents = 13;      // ANNOUNCE, HEARTBEAT
+  TunRelay relay = 14;                // ANNOUNCE, HEARTBEAT
+  TunDisconnectReason reason = 15;    // AGENT_DOWN
+}
+
+// TunClaimResponse is the engine's answer. A refused claim sets error and
+// message and claims nothing.
+message TunClaimResponse {
+  TunClaimError error = 1;
+  string message = 2;
+  repeated TunLiveTunnel tunnels = 3;  // CLAIM: the stored records, with allocated ports
+  repeated string conflicts = 4;       // ANNOUNCE: names now held elsewhere; close them
 }
 
 // ============================================================================

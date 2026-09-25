@@ -85,6 +85,13 @@ type Config struct {
 	DisableForwardedHeaders bool
 	// AccessLog logs every HTTP tunnel request.
 	AccessLog bool
+	// StreamAddr is the stream port of cluster mode: the edge and other
+	// relays send raw streams for a named tunnel here, with a signed PROXY
+	// header. Required with Cluster.
+	StreamAddr string
+	// Cluster links the relay to the other relays (Kubernetes mode); nil
+	// is a standalone relay.
+	Cluster Cluster
 	// SSHGateway enables the SSH jump gateway; nil disables it.
 	SSHGateway *GatewayConfig
 	// Login is the OIDC login service; nil when none is configured. Its
@@ -190,6 +197,9 @@ func (c *Config) validate() error {
 	}
 	if c.Tokens == nil {
 		return fmt.Errorf("relay: Tokens are required")
+	}
+	if c.Cluster != nil && c.StreamAddr == "" {
+		return fmt.Errorf("relay: cluster mode needs a StreamAddr")
 	}
 	c.BaseDomain = strings.ToLower(strings.TrimSuffix(c.BaseDomain, "."))
 	if c.BaseDomain == "" || !strings.Contains(c.BaseDomain, ".") {

@@ -22,7 +22,7 @@ func RegisterTypes(resources ifs.IResources) {
 	l8common.RegisterType(resources, &tun.EdgeNode{}, &tun.EdgeNodeList{}, "EdgeId")
 	l8common.RegisterType(resources, &tun.TunRelay{}, &tun.TunRelayList{}, "RelayId")
 	l8common.RegisterType(resources, &tun.TunAgent{}, &tun.TunAgentList{}, "AgentId")
-	l8common.RegisterType(resources, &tun.TunLiveTunnel{}, &tun.TunLiveTunnelList{}, "TunnelId")
+	l8common.RegisterType(resources, &tun.TunLiveTunnel{}, &tun.TunLiveTunnelList{}, "Name")
 	l8common.RegisterType(resources, &tun.TunAlertRule{}, &tun.TunAlertRuleList{}, "RuleId")
 
 	// Required system services (Events, Notify, IntegCfg; activated by
@@ -37,6 +37,8 @@ func RegisterTypes(resources ifs.IResources) {
 	resources.Registry().Register(&tun.TunIssueRequest{})
 	resources.Registry().Register(&tun.TunIssueResponse{})
 	resources.Registry().Register(&tun.TunCtlCommand{})
+	resources.Registry().Register(&tun.TunClaimRequest{})
+	resources.Registry().Register(&tun.TunClaimResponse{})
 	resources.Registry().Register(&l8api.L8FileDownloadRequest{})
 	resources.Registry().Register(&l8api.L8FileDownloadResponse{})
 }

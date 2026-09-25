@@ -37,6 +37,8 @@ type agentSession struct {
 	writeMu     sync.Mutex
 	lastSeen    atomic.Int64 // unix nanos of the last control message
 	rttMicros   atomic.Int64 // the agent's last reported heartbeat round trip
+	reason      atomic.Int32 // DisconnectReason; the first closer sets it
+	websocket   bool
 	// tunnelsMu guards the handshake fields read by Status and tunnels.
 	tunnelsMu sync.Mutex
 	tunnels   []*tunnel
@@ -44,10 +46,14 @@ type agentSession struct {
 
 // serveAgent runs an agent session on a connection that negotiated the
 // l8tunnel ALPN on the control SNI.
-func (s *Server) serveAgent(conn net.Conn, log *slog.Logger, peer *x509.Certificate) {
+func (s *Server) serveAgent(conn net.Conn, log *slog.Logger, peer *x509.Certificate, websocket bool) {
 	ip := remoteIP(conn.RemoteAddr())
 	if s.authFailures.Exhausted(ip) {
 		log.Warn("refused agent connection: too many failed authentications from this address")
+		return
+	}
+	if s.Draining() {
+		log.Info("refused agent connection", "reason", errDraining)
 		return
 	}
 	mux, err := transport.NewServerSession(conn, log)
@@ -57,7 +63,7 @@ func (s *Server) serveAgent(conn net.Conn, log *slog.Logger, peer *x509.Certific
 	}
 	defer mux.Close()
 
-	sess := &agentSession{server: s, id: protocol.RandomID(8), remote: conn.RemoteAddr().String(), log: log, mux: mux, peer: peer}
+	sess := &agentSession{server: s, id: protocol.RandomID(8), remote: conn.RemoteAddr().String(), log: log, mux: mux, peer: peer, websocket: websocket}
 	if !s.track(sess) {
 		return
 	}
@@ -74,9 +80,26 @@ func (s *Server) serveAgent(conn net.Conn, log *slog.Logger, peer *x509.Certific
 	}
 	s.counters.sessionsAccepted.Add(1)
 	sess.lastSeen.Store(time.Now().UnixNano())
+	if s.clustered() {
+		s.cfg.Cluster.AgentUp(sess.agentInfo(ip.String()))
+		defer func() { s.cfg.Cluster.AgentDown(sess.agentID, sess.id, DisconnectReason(sess.reason.Load())) }()
+	}
 	s.goTracked(sess.watchdog)
 	sess.controlLoop()
 	sess.log.Info("agent disconnected")
+}
+
+// agentInfo describes the session for the cluster.
+func (sess *agentSession) agentInfo(publicIP string) AgentInfo {
+	info := AgentInfo{SessionID: sess.id, AgentID: sess.agentID, TokenID: sess.token.ID, TokenName: sess.token.Name,
+		Version: sess.hello.GetAgentVersion(), OS: sess.hello.GetOs(), Arch: sess.hello.GetArch(),
+		PublicIP: publicIP, WebSocket: sess.websocket, ConnectedAt: sess.connectedAt}
+	if sess.peer != nil {
+		if _, serial, err := auth.CertIdentity(sess.peer); err == nil {
+			info.CertSerial = serial
+		}
+	}
+	return info
 }
 
 // handshake accepts the control stream, authenticates Hello and replies
@@ -164,6 +187,9 @@ func (sess *agentSession) controlLoop() {
 			reply = protocol.ErrorMessage(l8tunnel.ErrorCode_ERROR_CODE_INVALID_REQUEST,
 				"unexpected control message %T", body)
 		}
+		if reply == nil {
+			return // the session ends; the agent reconnects
+		}
 		if err := sess.send(reply); err != nil {
 			sess.log.Warn("control reply failed", "error", err)
 			return
@@ -184,7 +210,7 @@ func (sess *agentSession) watchdog() {
 			silent := time.Since(time.Unix(0, sess.lastSeen.Load()))
 			if silent > missedHeartbeats*interval {
 				sess.log.Warn("agent missed heartbeats, dropping session", "silent", silent.String())
-				sess.mux.Close()
+				sess.close(ReasonHeartbeat)
 				return
 			}
 		}
@@ -200,9 +226,18 @@ func (sess *agentSession) register(req *l8tunnel.Register) *l8tunnel.ControlMess
 	for _, spec := range req.GetTunnels() {
 		t, err := sess.server.openTunnel(sess, spec)
 		if err != nil {
+			var names []string
 			for _, o := range opened {
 				o.close()
 				sess.server.registry.rollback(o.res, sess, o.existed)
+				names = append(names, o.endpoint.GetName())
+			}
+			if sess.server.clustered() && len(names) > 0 {
+				sess.server.cfg.Cluster.ReleaseTunnels(sess.id, names)
+			}
+			if errors.Is(err, ErrClusterUnavailable) {
+				sess.log.Warn("registration deferred: the registry is unreachable; ending the session so the agent retries")
+				return nil
 			}
 			sess.log.Warn("tunnel registration rejected", "name", spec.GetName(), "error", err)
 			var rerr *protocol.RemoteError
@@ -237,9 +272,21 @@ func (sess *agentSession) closeTunnels() {
 	tunnels := sess.tunnels
 	sess.tunnels = nil
 	sess.tunnelsMu.Unlock()
+	var names []string
 	for _, t := range tunnels {
 		t.close()
 		sess.server.registry.park(t.res, sess)
+		names = append(names, t.endpoint.GetName())
+	}
+	if sess.server.clustered() && len(names) > 0 {
+		// A revoked token's names aren't held; every other disconnect
+		// keeps them for the grace period, on whichever relay the agent
+		// comes back to.
+		if DisconnectReason(sess.reason.Load()) == ReasonTokenRevoked {
+			sess.server.cfg.Cluster.ReleaseTunnels(sess.id, names)
+		} else {
+			sess.server.cfg.Cluster.ParkTunnels(sess.id, names)
+		}
 	}
 }
 

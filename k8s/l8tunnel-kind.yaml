@@ -6,8 +6,11 @@
 # between the pod network and the host network (the same fix l8alarms and
 # secscan use).
 #
-# Phase K1 deploys the vnet, the backend and the web server; the registry,
-# relays, edge and log services join in later phases.
+# Deployed so far: vnet, backend, web, registry and two relays; the edge and
+# the log services join in later phases. The relays run on the pod network
+# (two replicas on one node can't share host ports) and reach the vnet at
+# NODE_IP; the per-relay NodePort Services let the tests reach each relay
+# directly until the edge exists.
 
 apiVersion: v1
 kind: Namespace
@@ -35,6 +38,9 @@ data:
     agent_ca:
       cert: /etc/l8tunnel/agent-ca/ca.crt
       key: /etc/l8tunnel/agent-ca/ca.key
+    # KIND's pod network and its docker network (NodePort traffic arrives
+    # from the node).
+    trusted_proxies: [10.244.0.0/16, 172.16.0.0/12]
 
 ---
 
@@ -203,3 +209,184 @@ spec:
         resources:
           requests:
             storage: 1Gi
+
+---
+
+# The registry: the single owner of the live tables (claims engine).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: l8tunnel
+  name: l8tunnel-registry
+  labels:
+    app: l8tunnel-registry
+spec:
+  serviceName: l8tunnel-registry
+  replicas: 1
+  selector:
+    matchLabels:
+      app: l8tunnel-registry
+  template:
+    metadata:
+      labels:
+        app: l8tunnel-registry
+    spec:
+      hostNetwork: true
+      containers:
+        - name: l8tunnel-registry
+          image: saichler/l8tunnel-registry:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: L8TUNNEL_CLUSTER_CONFIG
+              value: /etc/l8tunnel/cluster/cluster.yaml
+            - name: L8TUNNEL_ALLOW_SIMULATED
+              value: "true"
+          volumeMounts:
+            - name: hdata
+              mountPath: /data
+            - name: cluster
+              mountPath: /etc/l8tunnel/cluster
+              readOnly: true
+      volumes:
+        - name: cluster
+          configMap:
+            name: l8tunnel-cluster
+  volumeClaimTemplates:
+    - metadata:
+        name: hdata
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 1Gi
+
+---
+
+# The relays.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: l8tunnel
+  name: l8tunnel-relay
+  labels:
+    app: l8tunnel-relay
+spec:
+  serviceName: l8tunnel-relay
+  replicas: 2
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: l8tunnel-relay
+  template:
+    metadata:
+      labels:
+        app: l8tunnel-relay
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: l8tunnel-relay
+          image: saichler/l8tunnel-relay:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: tls, containerPort: 8443}
+            - {name: http, containerPort: 8080}
+            - {name: stream, containerPort: 8444}
+            - {name: gateway, containerPort: 2222}
+            - {name: ops, containerPort: 9100}
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: L8TUNNEL_CLUSTER_CONFIG
+              value: /etc/l8tunnel/cluster/cluster.yaml
+          readinessProbe:
+            httpGet: {path: /readyz, port: 9100}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: 9100}
+            periodSeconds: 10
+          volumeMounts:
+            - name: hdata
+              mountPath: /data
+            - name: cluster
+              mountPath: /etc/l8tunnel/cluster
+              readOnly: true
+            - name: agent-ca
+              mountPath: /etc/l8tunnel/agent-ca
+              readOnly: true
+            - name: cluster-secret
+              mountPath: /etc/l8tunnel/cluster-secret
+              readOnly: true
+      volumes:
+        - name: cluster
+          configMap:
+            name: l8tunnel-cluster
+        - name: agent-ca
+          secret:
+            secretName: l8tunnel-agent-ca
+            defaultMode: 0400
+        - name: cluster-secret
+          secret:
+            secretName: l8tunnel-cluster
+            defaultMode: 0400
+  volumeClaimTemplates:
+    - metadata:
+        name: hdata
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 1Gi
+
+---
+
+# KIND tests: relay 0 straight from the host (until the edge exists).
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: l8tunnel
+  name: l8tunnel-relay-0
+  labels:
+    app: l8tunnel-relay
+spec:
+  type: NodePort
+  selector:
+    statefulset.kubernetes.io/pod-name: l8tunnel-relay-0
+  ports:
+    - {name: tls, port: 8443, targetPort: 8443, nodePort: 30443}
+    - {name: stream, port: 8444, targetPort: 8444, nodePort: 30444}
+    - {name: gateway, port: 2222, targetPort: 2222, nodePort: 30222}
+
+---
+
+# KIND tests: relay 1 straight from the host (until the edge exists).
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: l8tunnel
+  name: l8tunnel-relay-1
+  labels:
+    app: l8tunnel-relay
+spec:
+  type: NodePort
+  selector:
+    statefulset.kubernetes.io/pod-name: l8tunnel-relay-1
+  ports:
+    - {name: tls, port: 8443, targetPort: 8443, nodePort: 31443}
+    - {name: stream, port: 8444, targetPort: 8444, nodePort: 31444}
+    - {name: gateway, port: 2222, targetPort: 2222, nodePort: 31222}

@@ -37,6 +37,8 @@ commands:
                                          bind a tunnel name (and port) to a token
   reservation list
   reservation remove NAME
+  export --out DIR                       write export.json, ca.crt and ca.key for moving
+                                         to Kubernetes (TunIssue import, k8s/secrets.sh)
 
 Run as root or the relay's user: the admin socket is mode 0600.
 `
@@ -90,6 +92,9 @@ func RunServerCommand(socket string, args []string, stdout, stderr io.Writer) er
 		}
 		fmt.Fprintf(stdout, "removed reservation %q\n", args[2])
 		return nil
+	}
+	if args[0] == "export" {
+		return exportCommand(c, args[1:], stdout, stderr)
 	}
 	if args[0] == "status" {
 		return relayStatus(c, args[1:], stdout, stderr)

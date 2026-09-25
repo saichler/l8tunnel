@@ -30,6 +30,7 @@ type Server struct {
 	routes   routeConfigs
 	http     *httpproxy.Proxy
 
+	drainingFlag
 	counters     counters
 	connLimit    *auth.IPLimiter // new connections per IP
 	authFailures *auth.IPLimiter // failed agent/access-token authentications per IP
@@ -42,6 +43,7 @@ type Server struct {
 	httpServer   *http.Server
 	httpAddr     string
 	gatewayLn    net.Listener
+	streamLn     net.Listener
 	gatewayConns map[*ssh.ServerConn]struct{}
 	httpsPort    int
 	sessions     map[*agentSession]struct{}
@@ -66,6 +68,7 @@ func New(cfg Config) (*Server, error) {
 		connLimit:    auth.NewIPLimiter(rl.ConnectionsPerSecond, rl.ConnectionsBurst),
 		authFailures: auth.NewIPLimiter(float64(rl.AuthFailuresPerMinute)/60, rl.AuthFailuresPerMinute),
 	}
+	s.registry.clustered = cfg.Cluster != nil
 	for _, r := range cfg.Reservations {
 		if err := s.Reserve(r.Name, r.TokenID, r.Port); err != nil {
 			return nil, fmt.Errorf("relay: reservation %q: %w", r.Name, err)
@@ -141,6 +144,23 @@ func (s *Server) Start() error {
 			"host_key", ssh.FingerprintSHA256(g.HostKey.PublicKey()))
 	}
 
+	if s.cfg.StreamAddr != "" {
+		sln, err := net.Listen("tcp", s.cfg.StreamAddr)
+		if err != nil {
+			ln.Close()
+			if s.httpServer != nil {
+				s.httpServer.Close()
+			}
+			if s.gatewayLn != nil {
+				s.gatewayLn.Close()
+			}
+			return fmt.Errorf("relay: stream listen on %s: %w", s.cfg.StreamAddr, err)
+		}
+		s.streamLn = transport.ProxyProtocolListener(sln, s.cfg.TrustedProxies)
+		s.wg.Add(1)
+		go s.acceptWith(s.streamLn, s.serveStream)
+	}
+
 	s.listener = ln
 	s.log.Info("relay listening", "version", s.cfg.Version, "tls", ln.Addr().String(), "http", s.httpAddr,
 		"control_sni", s.cfg.ControlSNI, "base_domain", s.cfg.BaseDomain,
@@ -158,6 +178,17 @@ func (s *Server) Addr() net.Addr {
 		return nil
 	}
 	return s.listener.Addr()
+}
+
+// StreamAddr returns the stream port's address, or "" when it is off or
+// before Start.
+func (s *Server) StreamAddr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streamLn == nil {
+		return ""
+	}
+	return s.streamLn.Addr().String()
 }
 
 // GatewayAddr returns the SSH gateway's address, or "" when it is
@@ -205,6 +236,9 @@ func (s *Server) Close() error {
 	if s.gatewayLn != nil {
 		s.gatewayLn.Close()
 	}
+	if s.streamLn != nil {
+		s.streamLn.Close()
+	}
 	for c := range s.gatewayConns {
 		c.Close()
 	}
@@ -220,6 +254,11 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) acceptConns(ln net.Listener) {
+	s.acceptWith(ln, s.serveConn)
+}
+
+// acceptWith serves every connection of ln with serve until ln closes.
+func (s *Server) acceptWith(ln net.Listener, serve func(net.Conn)) {
 	defer s.wg.Done()
 	for {
 		conn, err := ln.Accept()
@@ -234,7 +273,7 @@ func (s *Server) acceptConns(ln net.Listener) {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			s.serveConn(conn)
+			serve(conn)
 		}()
 	}
 }

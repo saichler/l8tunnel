@@ -35,6 +35,9 @@ type nameRegistry struct {
 	domains map[string]*reservation // custom domain -> reservation
 	ports   map[int]struct{}
 	closed  bool
+	// clustered: the cluster's registry holds names across relays, so a
+	// finished session's names are dropped here instead of parked.
+	clustered bool
 }
 
 func newNameRegistry(grace time.Duration) *nameRegistry {
@@ -115,7 +118,7 @@ func (r *nameRegistry) park(res *reservation, sess *agentSession) {
 	if r.names[res.name] != res {
 		return // released (token revoked) while active
 	}
-	if r.closed && !res.permanent {
+	if (r.closed || r.clustered) && !res.permanent {
 		r.deleteLocked(res)
 		return
 	}

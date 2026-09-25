@@ -123,7 +123,7 @@ func (s *Server) serveConn(raw net.Conn) {
 				log.Warn("rejected control connection", "error", err)
 				return
 			}
-			s.serveAgent(tconn, log, peerCert(tconn.ConnectionState()))
+			s.serveAgent(tconn, log, peerCert(tconn.ConnectionState()), false)
 		}
 		return
 	}
@@ -136,6 +136,9 @@ func (s *Server) serveConn(raw net.Conn) {
 		return
 	}
 	t, typ, name := s.resolveHost(sni)
+	if t == nil && s.forwardToOwner(conn, raw, sni, log) {
+		return
+	}
 	switch {
 	case t != nil && !t.access.AllowsIP(remoteIP(raw.RemoteAddr())) && typ != l8tunnel.TunnelType_TUNNEL_TYPE_HTTP:
 		s.counters.rejectedIP.Add(1)

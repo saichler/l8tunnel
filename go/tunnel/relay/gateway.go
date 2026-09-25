@@ -13,6 +13,7 @@ import (
 
 	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/pipe"
+	"github.com/saichler/l8tunnel/go/tunnel/transport"
 )
 
 // GatewayKeyStore looks up SSH gateway keys by fingerprint; it returns nil
@@ -115,7 +116,11 @@ func (s *Server) gatewayChannel(sconn *ssh.ServerConn, newCh ssh.NewChannel, log
 		newCh.Reject(ssh.ConnectionFailed, "malformed request")
 		return
 	}
-	t, reason := s.gatewayTarget(sconn, req)
+	t, remote, reason := s.gatewayTarget(sconn, req)
+	if remote != "" {
+		s.gatewayRemote(sconn, newCh, req, remote, log)
+		return
+	}
 	if t == nil {
 		log.Info("gateway forward refused", "target", net.JoinHostPort(req.Host, strconv.Itoa(int(req.Port))), "reason", reason)
 		newCh.Reject(ssh.Prohibited, reason)
@@ -140,34 +145,77 @@ func (s *Server) gatewayChannel(sconn *ssh.ServerConn, newCh ssh.NewChannel, log
 
 // gatewayTarget resolves and authorizes a forward. The key is looked up
 // again, so removing it takes effect for new channels at once.
-func (s *Server) gatewayTarget(sconn *ssh.ServerConn, req directTCPIP) (*tunnel, string) {
+func (s *Server) gatewayTarget(sconn *ssh.ServerConn, req directTCPIP) (t *tunnel, remote string, reason string) {
 	host := strings.ToLower(strings.TrimSuffix(req.Host, "."))
 	if !strings.Contains(host, ".") {
 		host += "." + s.cfg.BaseDomain
 	}
 	name := s.rules.TunnelName(host)
 	if name == "" {
-		return nil, "unknown tunnel " + req.Host
-	}
-	t, typ, _ := s.registry.lookup(name)
-	if t == nil || !hasPublicPort(typ) {
-		return nil, "no connected ssh/tcp tunnel named " + name
-	}
-	if req.Port != 22 && req.Port != t.endpoint.GetPublicPort() {
-		return nil, fmt.Sprintf("tunnel %s is reached on port 22", name)
+		return nil, "", "unknown tunnel " + req.Host
 	}
 	key, err := s.cfg.SSHGateway.Keys.GatewayKeyByFingerprint(sconn.Permissions.Extensions["fingerprint"])
 	if err != nil || key == nil {
-		return nil, "the key was removed"
+		return nil, "", "the key was removed"
+	}
+	t, typ, _ := s.registry.lookup(name)
+	if t == nil && s.clustered() {
+		// Another relay serves it: its own IP lists apply there, with the
+		// client address in the signed PROXY header.
+		addr, accessToken, ok := s.cfg.Cluster.StreamOwnerOf(name)
+		switch {
+		case !ok:
+			return nil, "", "no connected ssh/tcp tunnel named " + name
+		case !key.Allows(name, accessToken):
+			return nil, "", "this key isn't granted tunnel " + name
+		}
+		return nil, addr, ""
+	}
+	if t == nil || !hasPublicPort(typ) {
+		return nil, "", "no connected ssh/tcp tunnel named " + name
+	}
+	if req.Port != 22 && req.Port != t.endpoint.GetPublicPort() {
+		return nil, "", fmt.Sprintf("tunnel %s is reached on port 22", name)
 	}
 	if !key.Allows(name, t.access.RequiresToken()) {
-		return nil, "this key isn't granted tunnel " + name
+		return nil, "", "this key isn't granted tunnel " + name
 	}
 	if !t.access.AllowsIP(remoteIP(sconn.RemoteAddr())) {
 		s.counters.rejectedIP.Add(1)
-		return nil, "your address isn't allowed by tunnel " + name
+		return nil, "", "your address isn't allowed by tunnel " + name
 	}
-	return t, ""
+	return t, "", ""
+}
+
+// gatewayRemote carries a gateway channel to another relay's stream port.
+func (s *Server) gatewayRemote(sconn *ssh.ServerConn, newCh ssh.NewChannel, req directTCPIP, addr string, log *slog.Logger) {
+	host := strings.ToLower(strings.TrimSuffix(req.Host, "."))
+	if !strings.Contains(host, ".") {
+		host += "." + s.cfg.BaseDomain
+	}
+	name := s.rules.TunnelName(host)
+	up, err := net.DialTimeout("tcp", addr, handshakeTimeout)
+	if err != nil {
+		newCh.Reject(ssh.ConnectionFailed, "the tunnel's relay is unreachable")
+		return
+	}
+	client := sconn.RemoteAddr()
+	tlvs := transport.SignedTLVs(s.cfg.Cluster.ForwardKey(), name, client.String(), time.Now())
+	if err := transport.WriteProxyHeader(up, client, up.RemoteAddr(), tlvs...); err != nil {
+		up.Close()
+		newCh.Reject(ssh.ConnectionFailed, "the tunnel's relay is unreachable")
+		return
+	}
+	ch, chReqs, err := newCh.Accept()
+	if err != nil {
+		up.Close()
+		return
+	}
+	go ssh.DiscardRequests(chReqs)
+	start := time.Now()
+	res := pipe.Join(ch, up.(*net.TCPConn))
+	log.Info("gateway connection closed", "tunnel", name, "relay", addr, "duration_ms", time.Since(start).Milliseconds(),
+		"bytes_in", res.AtoB, "bytes_out", res.BtoA)
 }
 
 func (s *Server) trackGateway(c *ssh.ServerConn) {

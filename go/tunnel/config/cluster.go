@@ -2,9 +2,11 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"strings"
 
+	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 	"github.com/saichler/l8tunnel/go/tunnel/registry"
 )
@@ -15,6 +17,9 @@ const ClusterEnv = "L8TUNNEL_CLUSTER_CONFIG"
 
 // DefaultClusterConfig is where the cluster ConfigMap is mounted.
 const DefaultClusterConfig = "/etc/l8tunnel/cluster.yaml"
+
+// DefaultClusterSecretDir is where the l8tunnel-cluster Secret is mounted.
+const DefaultClusterSecretDir = "/etc/l8tunnel/cluster-secret"
 
 // Relay ports inside the cluster (pod network, unprivileged).
 const (
@@ -53,6 +58,14 @@ type ClusterFile struct {
 		Gateway int `yaml:"gateway"` // default 2222
 		Ops     int `yaml:"ops"`     // default 9100
 	} `yaml:"relay"`
+	// TrustedProxies are the networks whose PROXY headers relays believe:
+	// the edge's node and the pod network.
+	TrustedProxies []string `yaml:"trusted_proxies"`
+	// SecretDir holds the l8tunnel-cluster Secret: forward-key (signs the
+	// PROXY headers between the edge and relays) and gateway-host-key (the
+	// SSH gateway's host key, the same on every relay). Default
+	// /etc/l8tunnel/cluster-secret.
+	SecretDir string `yaml:"secret_dir"`
 	// AgentCA are the files of the agent CA (the l8tunnel-agent-ca Secret).
 	AgentCA struct {
 		Cert string `yaml:"cert"`
@@ -100,6 +113,12 @@ func (f *ClusterFile) normalize() error {
 	if _, _, err := protocol.ParsePortRange(f.TCPPortRange); err != nil {
 		return fmt.Errorf("tcp_port_range: %w", err)
 	}
+	if f.SecretDir == "" {
+		f.SecretDir = DefaultClusterSecretDir
+	}
+	if _, err := auth.ParsePrefixes(f.TrustedProxies); err != nil {
+		return fmt.Errorf("trusted_proxies: %w", err)
+	}
 	setDefault(&f.Public.HTTPS, 443)
 	setDefault(&f.Public.HTTP, 80)
 	setDefault(&f.Relay.TLS, DefaultRelayTLSPort)
@@ -139,4 +158,10 @@ func (f *ClusterFile) Rules() registry.Rules {
 		PortMin:       lo,
 		PortMax:       hi,
 	}
+}
+
+// TrustedPrefixes are TrustedProxies parsed (checked when loaded).
+func (f *ClusterFile) TrustedPrefixes() []netip.Prefix {
+	p, _ := auth.ParsePrefixes(f.TrustedProxies)
+	return p
 }

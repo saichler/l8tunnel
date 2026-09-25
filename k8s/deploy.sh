@@ -29,12 +29,16 @@ fi
 echo "Applying l8tunnel (${MODE})..."
 "${KUBECTL[@]}" apply -f "$FILE"
 
-# Dependency order: vnet -> backend -> web.
+# Dependency order: vnet -> backend -> web -> registry -> relays.
 echo "Waiting for l8tunnel-vnet..."
 "${KUBECTL[@]}" -n l8tunnel rollout status "${WORKLOAD_KIND}/l8tunnel-vnet" --timeout=180s
 echo "Waiting for l8tunnel (backend)..."
 "${KUBECTL[@]}" -n l8tunnel rollout status statefulset/l8tunnel --timeout=300s
 echo "Waiting for l8tunnel-web..."
 "${KUBECTL[@]}" -n l8tunnel rollout status "${WORKLOAD_KIND}/l8tunnel-web" --timeout=180s
+echo "Waiting for l8tunnel-registry..."
+"${KUBECTL[@]}" -n l8tunnel rollout status statefulset/l8tunnel-registry --timeout=180s
+# Relays become ready once a tunnel certificate exists (uploaded in the UI,
+# or the first-start l8tunnel-tls Secret), so they aren't waited for here.
 
 echo "l8tunnel deployed (${MODE})."

@@ -36,7 +36,7 @@ func (s *Server) newWebSocketServer() (*http.Server, *transport.ConnListener) {
 		if r.TLS != nil {
 			peer = peerCert(*r.TLS)
 		}
-		s.serveAgent(conn, s.log.With("remote", conn.RemoteAddr().String(), "transport", "wss"), peer)
+		s.serveAgent(conn, s.log.With("remote", conn.RemoteAddr().String(), "transport", "wss"), peer, true)
 		conn.Close()
 	})
 	ln := transport.NewConnListener()

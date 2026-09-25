@@ -57,3 +57,10 @@ const RequestTimeout = 15
 // config: credentials[DB_CREDS].creds[DB_NAME].
 var DB_CREDS = "postgres"
 var DB_NAME = "l8tunnel"
+
+// Registry action services (area 42): relays call TunClaim, the UI's
+// disconnect and drain actions call TunCtl.
+const (
+	ClaimService = "TunClaim"
+	CtlService   = "TunCtl"
+)

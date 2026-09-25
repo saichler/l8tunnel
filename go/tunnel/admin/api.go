@@ -74,6 +74,7 @@ func RelayHandler(srv *relay.Server, st *store.Store, logger *slog.Logger) http.
 	a := &relayAPI{srv: srv, st: st, log: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", a.status)
+	mux.HandleFunc("GET /export", a.export)
 	mux.HandleFunc("GET /tokens", a.listTokens)
 	mux.HandleFunc("POST /tokens", a.createToken)
 	mux.HandleFunc("DELETE /tokens/{name}", a.revokeToken)

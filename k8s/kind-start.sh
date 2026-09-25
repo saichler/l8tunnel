@@ -29,6 +29,13 @@ nodes:
       - containerPort: 5443
         hostPort: 5443
         protocol: TCP
+      # The relays' NodePorts (tests reach each relay directly).
+      - {containerPort: 30443, hostPort: 30443, protocol: TCP}
+      - {containerPort: 30444, hostPort: 30444, protocol: TCP}
+      - {containerPort: 30222, hostPort: 30222, protocol: TCP}
+      - {containerPort: 31443, hostPort: 31443, protocol: TCP}
+      - {containerPort: 31444, hostPort: 31444, protocol: TCP}
+      - {containerPort: 31222, hostPort: 31222, protocol: TCP}
 KIND
 
 echo "Creating KIND cluster '${CLUSTER_NAME}'..."
@@ -40,6 +47,8 @@ IMAGES=(
   saichler/l8tunnel-vnet:latest
   saichler/l8tunnel:latest
   saichler/l8tunnel-web:latest
+  saichler/l8tunnel-registry:latest
+  saichler/l8tunnel-relay:latest
 )
 for img in "${IMAGES[@]}"; do
   if docker image inspect "$img" &>/dev/null; then

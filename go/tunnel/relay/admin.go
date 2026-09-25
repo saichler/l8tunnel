@@ -62,7 +62,7 @@ func (s *Server) DisconnectToken(tokenID string) int {
 	s.mu.Unlock()
 	for sess := range sessions {
 		sess.log.Info("token revoked, disconnecting agent")
-		sess.mux.Close()
+		sess.close(ReasonTokenRevoked)
 	}
 	return len(sessions)
 }
@@ -108,19 +108,24 @@ type SessionStatus struct {
 	Arch        string         `json:"arch"`
 	ConnectedAt time.Time      `json:"connected_at"`
 	RTTMicros   int64          `json:"rtt_us"` // agent-reported heartbeat round trip
+	LastSeen    time.Time      `json:"last_seen"`
 	Tunnels     []TunnelStatus `json:"tunnels"`
 }
 
 // TunnelStatus describes an active tunnel.
 type TunnelStatus struct {
-	Name          string `json:"name"`
-	Type          string `json:"type"`
-	PublicAddress string `json:"public_address"`
-	Hostname      string `json:"hostname"`
-	ActiveConns   int64  `json:"active_conns"`
-	TotalConns    int64  `json:"total_conns"`
-	BytesIn       int64  `json:"bytes_in"`
-	BytesOut      int64  `json:"bytes_out"`
+	TunnelID      string   `json:"tunnel_id"`
+	Name          string   `json:"name"`
+	PublicPort    int      `json:"public_port,omitempty"`
+	Domains       []string `json:"domains,omitempty"`
+	AccessToken   bool     `json:"access_token,omitempty"`
+	Type          string   `json:"type"`
+	PublicAddress string   `json:"public_address"`
+	Hostname      string   `json:"hostname"`
+	ActiveConns   int64    `json:"active_conns"`
+	TotalConns    int64    `json:"total_conns"`
+	BytesIn       int64    `json:"bytes_in"`
+	BytesOut      int64    `json:"bytes_out"`
 }
 
 // Status returns a snapshot of connected agents, their tunnels, and
@@ -158,11 +163,16 @@ func (sess *agentSession) status() (SessionStatus, bool) {
 		ID: sess.id, Token: sess.token.Name, TokenID: sess.token.ID, AgentID: sess.agentID,
 		Remote: sess.remote, Version: sess.hello.GetAgentVersion(), OS: sess.hello.GetOs(),
 		Arch: sess.hello.GetArch(), ConnectedAt: sess.connectedAt, RTTMicros: sess.rttMicros.Load(),
-		Tunnels: []TunnelStatus{},
+		LastSeen: time.Unix(0, sess.lastSeen.Load()),
+		Tunnels:  []TunnelStatus{},
 	}
 	for _, t := range sess.tunnels {
 		info.Tunnels = append(info.Tunnels, TunnelStatus{
+			TunnelID:      t.endpoint.GetTunnelId(),
 			Name:          t.endpoint.GetName(),
+			PublicPort:    int(t.endpoint.GetPublicPort()),
+			Domains:       t.endpoint.GetDomains(),
+			AccessToken:   t.access.RequiresToken(),
 			Type:          protocol.TunnelTypeName(t.endpoint.GetType()),
 			PublicAddress: t.endpoint.GetPublicAddress(),
 			Hostname:      t.endpoint.GetHostname(),

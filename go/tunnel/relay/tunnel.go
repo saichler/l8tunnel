@@ -110,6 +110,15 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 		},
 	}
 	switch {
+	case s.clustered():
+		// The registry checks and allocates cluster-wide; the edge forwards
+		// mode A ports to this relay's stream port, so nothing listens here.
+		port, err := s.claimInCluster(sess, t, spec, policy)
+		if err != nil {
+			s.registry.rollback(res, sess, existed)
+			return nil, err
+		}
+		s.setEndpointAddress(t, port)
 	case hasPublicPort(typ) && !access.RequiresToken():
 		ln, port, err := s.listenTunnelPort(res, int(spec.GetPublicPort()), policy)
 		if err != nil {
