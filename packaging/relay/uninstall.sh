@@ -3,7 +3,7 @@
 #   sudo ./uninstall.sh            keeps /etc/l8tunnel (config, certificate) and /var/lib/l8tunnel (tokens)
 #   sudo ./uninstall.sh --purge    also deletes those and the l8tunnel user
 set -euo pipefail
-[ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
 PURGE=0; [ "${1:-}" = "--purge" ] && PURGE=1
 
 systemctl disable --now l8tunnel-server 2>/dev/null || true

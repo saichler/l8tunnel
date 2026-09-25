@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Installs (or upgrades) the l8tunnel relay as a systemd service.
-#   sudo ./install.sh [--domain example.com] [--cert domain.cert.pem --key private.key.pem] [--no-start]
-# --domain sets base_domain in a fresh /etc/l8tunnel/server.yaml (default: the packaged one).
+#   ./install.sh        that's all: it asks for sudo, uses the certificate in this
+#                       package, opens the firewall, starts the relay and creates
+#                       a first agent token.
+# Optional: [--domain example.com] [--cert domain.cert.pem --key private.key.pem] [--no-start]
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -18,7 +20,11 @@ while [ $# -gt 0 ]; do
 done
 
 die() { echo "install: $*" >&2; exit 1; }
-[ "$(id -u)" -eq 0 ] || die "run as root (sudo ./install.sh)"
+if [ "$(id -u)" -ne 0 ]; then
+  command -v sudo >/dev/null || die "run as root"
+  echo "The installer needs root; asking sudo..."
+  exec sudo "$0" "$@"
+fi
 command -v systemctl >/dev/null || die "systemd is required"
 [ -z "$CERT$KEY" ] || [ -n "$CERT" -a -n "$KEY" ] || die "--cert and --key go together"
 if [ -n "$DOMAIN" ]; then
@@ -65,8 +71,20 @@ systemctl daemon-reload
 systemctl enable --quiet l8tunnel-server
 echo "installed $(/usr/local/bin/l8tunnel-server -version)"
 
+if [ -z "$CERT" ] && [ -s certs/fullchain.pem ] && [ -s certs/privkey.pem ]; then
+  CERT=certs/fullchain.pem KEY=certs/privkey.pem   # bundled with this package
+fi
 if [ -n "$CERT" ]; then
   ./install-cert.sh --no-restart "$CERT" "$KEY"
+fi
+
+# Open the relay's ports in the firewall, if one is active.
+if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+  ufw allow 443/tcp >/dev/null && ufw allow 80/tcp >/dev/null && ufw allow 22000:22999/tcp >/dev/null
+  echo "opened TCP 443, 80 and 22000-22999 in ufw"
+elif command -v firewall-cmd >/dev/null && firewall-cmd --state >/dev/null 2>&1; then
+  firewall-cmd -q --permanent --add-port=443/tcp --add-port=80/tcp --add-port=22000-22999/tcp && firewall-cmd -q --reload
+  echo "opened TCP 443, 80 and 22000-22999 in firewalld"
 fi
 
 # Ports the relay needs, unless it is the one holding them.
@@ -95,19 +113,48 @@ elif [ "$START" -eq 1 ]; then
   fi
 fi
 
-cat <<MSG
-
-Next steps
-  1. DNS: *.$BASE  A  <this machine's public IP>
-     Any existing explicit records (e.g. $BASE, www) keep working; they take precedence.
-  2. Firewall: allow inbound TCP 443, 80 and 22000-22999 (ssh/tcp tunnels).
-MSG
-if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
-  echo "     ufw is active:  sudo ufw allow 443/tcp; sudo ufw allow 80/tcp; sudo ufw allow 22000:22999/tcp"
-elif command -v firewall-cmd >/dev/null && firewall-cmd --state >/dev/null 2>&1; then
-  echo "     firewalld is active:  sudo firewall-cmd --permanent --add-port={443,80}/tcp --add-port=22000-22999/tcp && sudo firewall-cmd --reload"
+# First install: create an agent token and keep a root-only copy.
+TOKEN_FILE=/etc/l8tunnel/agent1.token
+if [ "$started" -eq 1 ] && [ ! -s "$TOKEN_FILE" ]; then
+  for i in 1 2 3 4 5; do [ -S /run/l8tunnel/admin.sock ] && break; sleep 1; done
+  if ! l8tunnel-server token list 2>/dev/null | grep -q '^agent1 '; then
+    token="$(l8tunnel-server token create --name agent1 | grep -o 'l8t_[^ ]*' || true)"
+    if [ -n "$token" ]; then
+      install -m 0600 /dev/null "$TOKEN_FILE"
+      echo "$token" > "$TOKEN_FILE"
+    fi
+  fi
 fi
-cat <<MSG
-  3. Create an agent token:  sudo l8tunnel-server token create --name <name>
-  Logs: journalctl -u l8tunnel-server -f     Status: sudo l8tunnel-server status
-MSG
+
+DNS_NOW="$(getent ahostsv4 "connect.$BASE" 2>/dev/null | awk '{print $1; exit}')"
+echo
+echo "=================================================================="
+if [ "$started" -eq 1 ]; then
+  echo " The l8tunnel relay is running for $BASE"
+else
+  echo " The l8tunnel relay is installed for $BASE (not started)"
+fi
+echo "=================================================================="
+echo
+echo " 1. DNS (at your domain registrar, e.g. Porkbun), one record:"
+echo "      *.$BASE   A   <the public IP of this machine>"
+if [ -n "$DNS_NOW" ]; then
+  echo "    connect.$BASE resolves to $DNS_NOW right now."
+else
+  echo "    connect.$BASE doesn't resolve yet."
+fi
+echo
+echo " 2. If this machine is behind a router or a cloud firewall, forward/allow"
+echo "    TCP 443, 80 and 22000-22999 to it."
+if [ -s "$TOKEN_FILE" ]; then
+  echo
+  echo " 3. On a machine you want to reach, run the agent with this token"
+  echo "    (a copy is in $TOKEN_FILE):"
+  echo
+  echo "      L8TUNNEL_TOKEN=$(cat "$TOKEN_FILE") \\"
+  echo "        l8tunnel-agent --relay connect.$BASE:443 ssh --name homebox"
+  echo
+  echo "    then:  ssh -p <port it prints> you@$BASE"
+fi
+echo
+echo " Logs: journalctl -u l8tunnel-server -f      Status: sudo l8tunnel-server status"

@@ -1,36 +1,38 @@
-l8tunnel relay (l8tunnel-server)
-================================
+l8tunnel relay
+==============
 
-Install
-  tar xzf l8tunnel-server-*-linux-amd64.tar.gz
-  cd l8tunnel-server-*-linux-amd64
-  sudo ./install.sh --cert /path/to/domain.cert.pem --key /path/to/private.key.pem
+Install (on the relay machine)
+  tar xzf l8tunnel-relay-*.tar.gz
+  cd l8tunnel-relay-*/
+  ./install.sh
 
-  The packaged configuration uses the base domain layer8-tunnel.info; for
-  another domain add --domain example.com (the certificate must cover
-  *.example.com).
+That's it. install.sh asks for your sudo password, then installs the relay
+as a systemd service, installs the certificate that comes with this package,
+opens the firewall (ufw or firewalld, if active), starts the relay, creates a
+first agent token and prints what to do next:
 
-  The certificate and key are copied to /etc/l8tunnel/tls (readable only by
-  root and the l8tunnel user); they are never part of this package.
+  1. One DNS record at your registrar:  *.<domain>  A  <public IP of this machine>
+  2. If there's a router or cloud firewall in front: allow TCP 443, 80, 22000-22999.
+  3. Run the agent on the machine you want to reach, with the printed token.
+
+This package contains the certificate's PRIVATE KEY (certs/privkey.pem).
+Keep the .tar.gz private and delete it from the relay after installing.
 
 What it installs
   /usr/local/bin/l8tunnel-server              the relay
   /etc/systemd/system/l8tunnel-server.service systemd unit (runs as user l8tunnel)
-  /etc/l8tunnel/server.yaml                   configuration (base domain layer8-tunnel.info)
+  /etc/l8tunnel/server.yaml                   configuration
   /etc/l8tunnel/tls/                          certificate and key
-  /var/lib/l8tunnel/                          tokens and reservations (created by systemd)
+  /etc/l8tunnel/agent1.token                  the first agent token (root only)
+  /var/lib/l8tunnel/                          tokens and reservations
 
-After installing
-  1. DNS at Porkbun:  *.layer8-tunnel.info  A  <public IP of this machine>
-  2. Open TCP 443, 80 and 22000-22999 in the firewall.
-  3. sudo l8tunnel-server token create --name laptop    (copy the token; it's shown once)
-  4. On the machine behind the firewall:
-       L8TUNNEL_TOKEN=l8t_... l8tunnel-agent --relay connect.layer8-tunnel.info:443 ssh --name homebox
-       L8TUNNEL_TOKEN=l8t_... l8tunnel-agent --relay connect.layer8-tunnel.info:443 http 3000 --name app
+Everyday commands
+  sudo l8tunnel-server status                 connected agents and tunnels
+  sudo l8tunnel-server token create --name X  another agent token
+  journalctl -u l8tunnel-server -f            logs
 
-Renewing the certificate (it expires every 90 days)
-  sudo ./install-cert.sh domain.cert.pem private.key.pem     (validates, installs, restarts)
-  The relay logs a warning daily from 21 days before expiry: journalctl -u l8tunnel-server
+Renewing the certificate: build a new package with the new certificate and run
+its ./install.sh (settings and tokens are kept), or on the relay:
+  sudo ./install-cert.sh domain.cert.pem private.key.pem
 
-Upgrade:    run the new package's install.sh (your server.yaml is kept)
-Uninstall:  sudo ./uninstall.sh [--purge]
+Uninstall:  ./uninstall.sh   (add --purge to delete configuration and tokens)
