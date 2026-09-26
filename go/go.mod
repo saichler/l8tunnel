@@ -37,7 +37,7 @@ require (
 	github.com/saichler/l8notify v0.0.0-20260920040606-60469cb52176 // indirect
 	github.com/saichler/l8orm v0.0.0-20260916142109-e7f0284c95ee // indirect
 	github.com/saichler/l8ql v0.0.0-20260921131529-5b079580f08c // indirect
-	github.com/saichler/l8reflect v0.0.0-20260926044042-445d18326790 // indirect
+	github.com/saichler/l8reflect v0.0.0-20260926132352-647e2d1c16a7 // indirect
 	github.com/saichler/l8web v0.0.0-20260920002634-0e48182bb933 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	go.uber.org/multierr v1.11.0 // indirect

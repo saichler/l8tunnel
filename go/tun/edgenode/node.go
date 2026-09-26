@@ -178,10 +178,11 @@ func (n *Node) report() {
 	rec := &tun.EdgeNode{EdgeId: n.id, NodeIp: n.nodeIP, Version: n.version, ConfigVersion: st.Version,
 		Listeners: st.Listeners, Backends: st.Backends, TotalConns: st.Accepted, StartedAt: n.startedAt.Unix(),
 		LastSeen: time.Now().Unix()}
-	// POST creates the record once; later reports update it with PATCH. A
-	// PATCH that fails (the backend restarted and lost it) creates it again.
+	// POST creates the record once; each later report replaces it with PUT
+	// (a report is the whole state: a PATCH would keep listeners, errors and
+	// backends that are gone). A PUT that fails creates it again.
 	if n.reported.Load() {
-		if err := common.PatchEntity(common.EdgeNodeService, common.AreaEdge, rec, n.vnic); err == nil {
+		if err := l8common.PutEntity(common.EdgeNodeService, common.AreaEdge, rec, n.vnic); err == nil {
 			return
 		}
 	}

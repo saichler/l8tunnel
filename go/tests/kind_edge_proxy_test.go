@@ -174,5 +174,31 @@ func TestKindEdgeProxy(t *testing.T) {
 			}
 			return https && busy
 		})
+		// Each report replaces the record: once the site is gone, so are its
+		// listener and error.
+		if err := c.remove(common.AreaEdge, common.DomainService, "EdgeDomain", "domainId="+stored.DomainId); err != nil {
+			t.Fatal(err)
+		}
+		var last []*tun.EdgeListenerStatus
+		defer func() {
+			if t.Failed() {
+				for _, l := range last {
+					t.Logf("listener %d-%d bound=%v error=%q domains=%v", l.Port, l.PortEnd, l.Bound, l.Error, l.Domains)
+				}
+			}
+		}()
+		waitUntil(t, 90*time.Second, "the removed listener gone from the edge report", func() bool {
+			n := edgeNode(t, c)
+			if n == nil {
+				return false
+			}
+			last = n.Listeners
+			for _, l := range n.Listeners {
+				if l.Port == 5443 || l.Error != "" {
+					return false
+				}
+			}
+			return true
+		})
 	})
 }

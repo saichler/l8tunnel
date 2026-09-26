@@ -32,7 +32,7 @@ func TestKindAlertsFire(t *testing.T) {
 
 	rules := map[string]*tun.TunAlertRule{
 		// Every certificate expires within 100 years.
-		"cert": {Name: uniqueName("cert"), Condition: tun.TunAlertCondition_TUN_ALERT_CONDITION_CERT_EXPIRING, Threshold: 36500},
+		"cert":     {Name: uniqueName("cert"), Condition: tun.TunAlertCondition_TUN_ALERT_CONDITION_CERT_EXPIRING, Threshold: 36500},
 		"listener": {Name: uniqueName("listener"), Condition: tun.TunAlertCondition_TUN_ALERT_CONDITION_EDGE_LISTENER_FAILED},
 	}
 	ids := map[string]string{}

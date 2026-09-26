@@ -41,15 +41,17 @@ func activateView(vnic ifs.IVNic, name string, item, list proto.Message, pk stri
 	return &view{handler: h, vnic: vnic}
 }
 
-// apply mirrors one engine change: POST creates a row, PATCH updates it,
-// DELETE removes it (key holds just the primary key).
+// apply mirrors one engine change: POST creates a row, PUT replaces it
+// with the engine's full record (a PATCH would keep fields the engine
+// cleared, like grace_until back to 0), DELETE removes it (key holds just
+// the primary key).
 func (v *view) apply(elem, key interface{}, change claims.Change) {
 	var resp ifs.IElements
 	switch change {
 	case claims.Created:
 		resp = v.handler.Post(object.New(nil, elem), v.vnic)
 	case claims.Updated, claims.Moved:
-		resp = v.handler.Patch(object.New(nil, elem), v.vnic)
+		resp = v.handler.Put(object.New(nil, elem), v.vnic)
 	case claims.Deleted:
 		resp = v.handler.Delete(object.New(nil, key), v.vnic)
 	}
