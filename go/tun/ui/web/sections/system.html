@@ -1,0 +1,172 @@
+<!--
+© 2025 Sharon Aicler (saichler@gmail.com)
+
+Layer 8 Ecosystem is licensed under the Apache License, Version 2.0.
+You may obtain a copy of the License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+<div class="section-container l8-section">
+    <!-- Header with Parallax Effect -->
+    <div class="l8-header-frame parallax-container">
+        <!-- Background Illustration Layer -->
+        <div class="l8-header-bg parallax-layer" data-speed="0.5">
+            <svg class="l8-illustration" viewBox="0 0 1200 120" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <linearGradient id="sysGradient1" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" style="stop-color:#0ea5e9;stop-opacity:0.4" />
+                        <stop offset="100%" style="stop-color:#0284c7;stop-opacity:0.2" />
+                    </linearGradient>
+                </defs>
+
+                <!-- Grid Background -->
+                <g opacity="0.1">
+                    <line x1="0" y1="30" x2="1200" y2="30" stroke="#0ea5e9" stroke-width="0.5"/>
+                    <line x1="0" y1="60" x2="1200" y2="60" stroke="#0ea5e9" stroke-width="0.5"/>
+                    <line x1="0" y1="90" x2="1200" y2="90" stroke="#0ea5e9" stroke-width="0.5"/>
+                    <line x1="200" y1="0" x2="200" y2="120" stroke="#0ea5e9" stroke-width="0.5"/>
+                    <line x1="400" y1="0" x2="400" y2="120" stroke="#0ea5e9" stroke-width="0.5"/>
+                    <line x1="600" y1="0" x2="600" y2="120" stroke="#0ea5e9" stroke-width="0.5"/>
+                    <line x1="800" y1="0" x2="800" y2="120" stroke="#0ea5e9" stroke-width="0.5"/>
+                    <line x1="1000" y1="0" x2="1000" y2="120" stroke="#0ea5e9" stroke-width="0.5"/>
+                </g>
+
+                <!-- Security Icons -->
+                <g class="people-animation">
+                    <!-- Lock Icon -->
+                    <rect x="185" y="50" width="30" height="25" rx="3" fill="url(#sysGradient1)" opacity="0.6"/>
+                    <path d="M 192,50 L 192,42 A 8,8 0 0 1 208,42 L 208,50" fill="none" stroke="url(#sysGradient1)" stroke-width="3" opacity="0.5"/>
+
+                    <!-- Shield Icon -->
+                    <path d="M 400,35 L 420,30 L 440,35 L 440,55 C 440,70 420,80 420,80 C 420,80 400,70 400,55 Z" fill="url(#sysGradient1)" opacity="0.5"/>
+                    <path d="M 415,55 L 420,60 L 430,48" fill="none" stroke="#fff" stroke-width="2" opacity="0.6"/>
+
+                    <!-- Key Icon -->
+                    <circle cx="600" cy="55" r="12" fill="url(#sysGradient1)" opacity="0.6"/>
+                    <circle cx="600" cy="55" r="5" fill="none" stroke="#fff" stroke-width="2" opacity="0.4"/>
+                    <line x1="605" y1="55" x2="625" y2="55" stroke="url(#sysGradient1)" stroke-width="3" opacity="0.6"/>
+                    <line x1="620" y1="55" x2="620" y2="62" stroke="url(#sysGradient1)" stroke-width="3" opacity="0.6"/>
+
+                    <!-- User/Gear Icon -->
+                    <circle cx="800" cy="48" r="8" fill="url(#sysGradient1)" opacity="0.5"/>
+                    <path d="M 785,75 C 785,60 815,60 815,75" fill="url(#sysGradient1)" opacity="0.4"/>
+
+                    <!-- Server Icon -->
+                    <rect x="975" y="40" width="50" height="15" rx="3" fill="url(#sysGradient1)" opacity="0.6"/>
+                    <rect x="975" y="58" width="50" height="15" rx="3" fill="url(#sysGradient1)" opacity="0.5"/>
+                    <circle cx="985" cy="47" r="2" fill="#fff" opacity="0.5"/>
+                    <circle cx="985" cy="65" r="2" fill="#fff" opacity="0.5"/>
+                </g>
+
+                <!-- Connection Lines -->
+                <path d="M 215,55 Q 310,40 400,50" fill="none" stroke="#0ea5e9" stroke-width="1" opacity="0.3"/>
+                <path d="M 440,55 Q 520,70 588,55" fill="none" stroke="#0ea5e9" stroke-width="1" opacity="0.3"/>
+                <path d="M 625,55 Q 710,45 785,55" fill="none" stroke="#0ea5e9" stroke-width="1" opacity="0.3"/>
+                <path d="M 815,60 Q 890,75 975,55" fill="none" stroke="#0ea5e9" stroke-width="1" opacity="0.3"/>
+
+                <!-- Animated Dots -->
+                <circle cx="310" cy="48" r="3" fill="#0ea5e9" opacity="0.8">
+                    <animate attributeName="opacity" values="0.3;1;0.3" dur="2s" repeatCount="indefinite"/>
+                </circle>
+                <circle cx="710" cy="50" r="3" fill="#0ea5e9" opacity="0.8">
+                    <animate attributeName="opacity" values="0.3;1;0.3" dur="2.5s" repeatCount="indefinite"/>
+                </circle>
+            </svg>
+        </div>
+
+        <!-- Header Content Layer -->
+        <div class="l8-header-content parallax-layer" data-speed="1">
+            <div class="l8-header-title">
+                <div class="l8-icon">⚙️</div>
+                <div>
+                    <h1 class="l8-title">System Administration</h1>
+                    <p class="l8-subtitle">Users, Roles & Credentials Management</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Module Tabs -->
+    <div class="l8-module-tabs">
+        <button class="l8-module-tab active" data-module="health">
+            <span class="tab-icon">💚</span>
+            <span class="tab-label">Health</span>
+        </button>
+        <button class="l8-module-tab" data-module="security">
+            <span class="tab-icon">🔒</span>
+            <span class="tab-label">Security</span>
+        </button>
+        <button class="l8-module-tab" data-module="modules">
+            <span class="tab-icon">🧩</span>
+            <span class="tab-label">Modules</span>
+        </button>
+        <button class="l8-module-tab" data-module="logs">
+            <span class="tab-icon">📋</span>
+            <span class="tab-label">Logs</span>
+        </button>
+        <button class="l8-module-tab" data-module="dataimport">
+            <span class="tab-icon">📥</span>
+            <span class="tab-label">Data Import</span>
+        </button>
+    </div>
+
+    <div class="section-content">
+        <!-- Health Module -->
+        <div class="l8-module-content active" data-module="health">
+            <div class="l8-table-container" id="health-table-container"></div>
+        </div>
+
+        <!-- Security Module -->
+        <div class="l8-module-content" data-module="security">
+            <nav class="l8-subnav">
+                <a class="l8-subnav-item active" data-service="users"><span class="subnav-icon">👤</span><span class="subnav-label">Users</span></a>
+                <a class="l8-subnav-item" data-service="roles"><span class="subnav-icon">🛡️</span><span class="subnav-label">Roles</span></a>
+                <a class="l8-subnav-item" data-service="credentials"><span class="subnav-icon">🔑</span><span class="subnav-label">Credentials</span></a>
+                <a class="l8-subnav-item" data-service="events"><span class="subnav-icon">📝</span><span class="subnav-label">Events</span></a>
+            </nav>
+            <div class="l8-service-content">
+                <div class="l8-service-view active" data-service="users">
+                    <div class="l8-table-container" id="security-users-table-container"></div>
+                </div>
+                <div class="l8-service-view" data-service="roles">
+                    <div class="l8-table-container" id="security-roles-table-container"></div>
+                </div>
+                <div class="l8-service-view" data-service="credentials">
+                    <div class="l8-table-container" id="security-credentials-table-container"></div>
+                </div>
+                <div class="l8-service-view" data-service="events">
+                    <div class="l8-table-container" id="security-events-table-container"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modules Module -->
+        <div class="l8-module-content" data-module="modules">
+            <div class="l8-service-content" style="overflow-y:auto;">
+                <div id="modules-settings-container"></div>
+            </div>
+        </div>
+
+        <!-- Logs Module -->
+        <div class="l8-module-content" data-module="logs">
+            <div class="l8-table-container" id="logs-table-container"></div>
+        </div>
+
+        <!-- Data Import Module -->
+        <div class="l8-module-content" data-module="dataimport">
+            <div id="dataimport-container"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    if (typeof initializeL8Sys === 'function') {
+        initializeL8Sys();
+    }
+</script>

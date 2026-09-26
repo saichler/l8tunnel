@@ -1,0 +1,77 @@
+/* l8tunnel UI styles. Theme tokens only (--layer8d-*). */
+
+.tun-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: var(--layer8d-space-md);
+    margin-top: var(--layer8d-space-md);
+}
+
+.tun-muted {
+    color: var(--layer8d-text-muted);
+    font-size: var(--layer8d-font-sm);
+}
+
+/* Actions at the top of a detail popup */
+.tun-action-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--layer8d-space-sm);
+    margin-bottom: var(--layer8d-space-md);
+    padding-bottom: var(--layer8d-space-sm);
+    border-bottom: 1px solid var(--layer8d-border);
+}
+
+.tun-danger {
+    color: var(--layer8d-error);
+    border-color: var(--layer8d-error);
+}
+
+/* A record's related table under its details (an agent's tunnels) */
+.tun-related {
+    margin-top: var(--layer8d-space-lg);
+}
+
+.tun-related-title {
+    font-size: var(--layer8d-font-lg);
+    color: var(--layer8d-text-dark);
+    margin-bottom: var(--layer8d-space-sm);
+}
+
+/* Show-once secrets (a new token, a new certificate's key) */
+.tun-once-warning {
+    color: var(--layer8d-warning);
+    background: var(--layer8d-warning-bg);
+    padding: var(--layer8d-space-sm) var(--layer8d-space-md);
+    border-radius: var(--layer8d-radius-sm);
+    margin-bottom: var(--layer8d-space-md);
+}
+
+.tun-secret {
+    margin-bottom: var(--layer8d-space-md);
+}
+
+.tun-secret label {
+    display: block;
+    font-weight: var(--layer8d-font-weight-semibold);
+    color: var(--layer8d-text-label);
+    margin-bottom: var(--layer8d-space-xs);
+}
+
+.tun-secret-value {
+    width: 100%;
+    font-family: var(--layer8d-font-mono);
+    font-size: var(--layer8d-font-sm);
+    background: var(--layer8d-bg-input);
+    color: var(--layer8d-text-dark);
+    border: 1px solid var(--layer8d-border);
+    border-radius: var(--layer8d-radius-sm);
+    padding: var(--layer8d-space-sm);
+    resize: vertical;
+}
+
+.tun-secret-actions {
+    display: flex;
+    gap: var(--layer8d-space-sm);
+    margin-top: var(--layer8d-space-xs);
+}

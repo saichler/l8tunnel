@@ -30,6 +30,8 @@ func RegisterTypes(resources ifs.IResources) {
 	l8common.RegisterType(resources, &l8events.EventRecord{}, &l8events.EventRecordList{}, "EventId")
 	l8common.RegisterType(resources, &l8notify.NotifyRecord{}, &l8notify.NotifyRecordList{}, "NotifyId")
 	l8common.RegisterType(resources, &l8notify.IntegrationConfig{}, &l8notify.IntegrationConfigList{}, "IntegrationId")
+	// System ▸ Data Import's templates (the backend's ImprtTmpl service).
+	l8common.RegisterType(resources, &l8api.L8ImportTemplate{}, &l8api.L8ImportTemplateList{}, "TemplateId")
 
 	// Request/response types of the action and listener services. The web
 	// process can't route to a service whose endpoint types it can't

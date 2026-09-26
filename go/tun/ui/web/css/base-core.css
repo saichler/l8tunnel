@@ -1,0 +1,508 @@
+/*
+© 2025 Sharon Aicler (saichler@gmail.com)
+
+Layer 8 Ecosystem is licensed under the Apache License, Version 2.0.
+You may obtain a copy of the License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+/* Tier 1 Carrier Network Operation Center (NOC) Theme */
+/* Inspired by AT&T, Verizon, Level3/Lumen, and professional NOC monitoring systems */
+
+/* ============================================ */
+/* FIGTREE FONT FACES */
+/* ============================================ */
+
+@font-face {
+    font-family: 'Figtree';
+    src: url('../l8ui/font/static/Figtree-Regular.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'Figtree';
+    src: url('../l8ui/font/static/Figtree-Medium.ttf') format('truetype');
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'Figtree';
+    src: url('../l8ui/font/static/Figtree-SemiBold.ttf') format('truetype');
+    font-weight: 600;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'Figtree';
+    src: url('../l8ui/font/static/Figtree-Bold.ttf') format('truetype');
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+}
+
+/* ============================================ */
+/* GLOBAL STYLES */
+/* ============================================ */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--layer8d-bg-light);
+    background-attachment: fixed;
+    color: var(--layer8d-text-dark);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-size: 14px;
+    overflow-x: hidden;
+}
+
+/* ============================================ */
+/* MAIN APPLICATION LAYOUT */
+/* ============================================ */
+
+.app-container {
+    display: grid;
+    grid-template-areas:
+        "header header"
+        "sidebar content";
+    grid-template-columns: 260px 1fr;
+    grid-template-rows: 60px 1fr;
+    height: 100vh;
+    background: var(--layer8d-bg-light);
+}
+
+/* ============================================ */
+/* HEADER STYLES */
+/* ============================================ */
+
+.app-header {
+    grid-area: header;
+    background: var(--layer8d-bg-white);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--layer8d-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 30px;
+    box-shadow: var(--layer8d-shadow-md);
+    position: relative;
+    z-index: 100;
+}
+
+.header-illustration {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    opacity: 0.6;
+    z-index: 1;
+}
+
+.header-left,
+.header-right {
+    position: relative;
+    z-index: 2;
+}
+
+.app-header::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--layer8d-border);
+    box-shadow: none;
+}
+
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+.header-logo {
+    width: 50px;
+    height: 50px;
+    filter: drop-shadow(0 0 10px rgba(21, 101, 192, 0.4));
+}
+
+.header-title h1 {
+    font-size: 22px;
+    color: var(--layer8d-text-dark);
+    font-weight: 700;
+    margin-bottom: 0;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    font-family: 'Figtree', sans-serif;
+    text-shadow: none;
+}
+
+.header-subtitle {
+    font-size: 9px;
+    color: var(--layer8d-text-muted);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-top: 2px;
+}
+
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 30px;
+}
+
+.powered-by-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 9px;
+    color: var(--layer8d-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 700;
+}
+
+.layer8-header-logo {
+    width: 50px;
+    height: 50px;
+    filter: drop-shadow(0 0 6px rgba(21, 101, 192, 0.3));
+}
+
+.layer8-header-text {
+    font-weight: 700;
+    color: var(--layer8d-text-medium);
+    letter-spacing: 1px;
+}
+
+.user-menu {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+}
+
+.username {
+    color: var(--layer8d-text-dark);
+    font-weight: 700;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.logout-btn {
+    padding: 8px 20px;
+    background: linear-gradient(135deg, var(--layer8d-primary) 0%, var(--layer8d-primary-dark) 100%);
+    color: var(--layer8d-on-primary, white);
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    transition: all 0.3s ease;
+    font-family: 'Figtree', sans-serif;
+    box-shadow: var(--layer8d-shadow-md);
+}
+
+.logout-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--layer8d-shadow-lg);
+    background: linear-gradient(135deg, var(--layer8d-primary-dark) 0%, var(--layer8d-primary) 100%);
+}
+
+/* ============================================ */
+/* SIDEBAR NAVIGATION */
+/* ============================================ */
+
+.sidebar {
+    grid-area: sidebar;
+    background: var(--layer8d-bg-white);
+    backdrop-filter: blur(20px);
+    border-right: 1px solid var(--layer8d-border);
+    overflow-y: auto;
+    padding: 15px 0;
+}
+
+.nav-menu {
+    list-style: none;
+}
+
+.nav-link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    margin: 1px 0;
+    color: var(--layer8d-text-medium);
+    text-decoration: none;
+    transition: all 0.3s ease;
+    border-left: 3px solid transparent;
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    position: relative;
+}
+
+.nav-link:hover {
+    background: var(--layer8d-bg-hover);
+    color: var(--layer8d-primary);
+    border-left-color: var(--layer8d-primary);
+}
+
+.nav-link.active {
+    background: var(--layer8d-bg-hover);
+    color: var(--layer8d-primary);
+    border-left-color: var(--layer8d-primary);
+    font-weight: 600;
+    box-shadow: inset 3px 0 0 var(--layer8d-primary);
+}
+
+.nav-icon {
+    font-size: 16px;
+    width: 20px;
+    text-align: center;
+    opacity: 1;
+    display: inline-flex;
+    justify-content: center;
+}
+
+/* Sizing for the real <svg> icons (stroke="currentColor", theme-aware)
+   that replaced the hardcoded emoji glyphs here -- emoji render with
+   their own fixed multi-color glyph on every theme and can't be
+   recolored via CSS, which is why the sidebar used to look identically
+   "colorful" regardless of the active theme (noir included). */
+.nav-icon svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* ============================================ */
+/* MAIN CONTENT AREA */
+/* ============================================ */
+
+.main-content {
+    grid-area: content;
+    background: var(--layer8d-bg-light);
+    overflow: hidden;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+#content-area {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.section-container {
+    background: var(--layer8d-bg-white);
+    border-radius: 16px;
+    padding: 7px;
+    box-shadow: var(--layer8d-shadow-sm);
+    border: 1px solid var(--layer8d-border);
+    overflow: hidden;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.section-title {
+    /* Reduced 20% across the board (font-size/margin/padding) to cut the
+       title block's overall height, per explicit user request. */
+    font-size: 19px;
+    color: var(--layer8d-text-dark);
+    margin-bottom: 20px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--layer8d-border);
+    padding-bottom: 12px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    font-family: 'Figtree', sans-serif;
+}
+
+.section-title::before {
+    content: '';
+    width: 3px;
+    height: 24px;
+    background: var(--layer8d-primary);
+    box-shadow: none;
+}
+
+.section-content {
+    color: var(--layer8d-text-medium);
+    font-size: 14px;
+    line-height: 1.8;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.section-description {
+    color: var(--layer8d-text-muted);
+    font-size: 12px;
+    font-style: normal;
+    margin-bottom: 20px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+/* ============================================ */
+/* IFRAME MODAL EXPANSION */
+/* ============================================ */
+
+/* When iframe modal is active, remove overflow constraints from ancestors */
+body.iframe-modal-active .main-content,
+body.iframe-modal-active .section-container,
+body.iframe-modal-active .section-content,
+body.iframe-modal-active .table-container {
+    overflow: visible !important;
+}
+
+#targets-iframe.modal-active {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    z-index: 9999 !important;
+    background: transparent;
+}
+
+/* ============================================ */
+/* SCROLLBAR STYLES */
+/* ============================================ */
+
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--layer8d-bg-light);
+    border-left: 1px solid var(--layer8d-border);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--layer8d-border-dark);
+    border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--layer8d-primary);
+}
+
+/* ============================================ */
+/* NOC STATUS INDICATORS */
+/* ============================================ */
+
+.status-indicator {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 8px;
+}
+
+.status-operational {
+    background: var(--status-operational);
+    box-shadow: var(--glow-green);
+}
+
+.status-warning {
+    background: var(--status-warning);
+    box-shadow: var(--glow-amber);
+}
+
+.status-critical {
+    background: var(--status-critical);
+    box-shadow: var(--glow-red);
+    animation: pulse-critical 1s infinite;
+}
+
+.status-offline {
+    background: var(--status-offline);
+}
+
+@keyframes pulse-critical {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* ============================================ */
+/* NOC UTILITY CLASSES */
+/* ============================================ */
+
+.noc-card {
+    background: var(--layer8d-bg-card);
+    border: 1px solid var(--border-emphasis);
+    border-top: 2px solid var(--layer8d-primary);
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.noc-metric {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.noc-metric-label {
+    font-size: 11px;
+    color: var(--layer8d-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 700;
+}
+
+.noc-metric-value {
+    font-size: 18px;
+    color: var(--layer8d-primary);
+    font-weight: 900;
+    font-family: 'Roboto Mono', monospace;
+}
+
+/* ============================================ */
+/* ANIMATIONS */
+/* ============================================ */
+
+@keyframes fade-in-up {
+    0% {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    100% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}

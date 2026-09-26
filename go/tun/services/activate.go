@@ -13,6 +13,7 @@ import (
 	"github.com/saichler/l8tunnel/go/tun/alerts"
 	"github.com/saichler/l8tunnel/go/tun/edge/domains"
 	"github.com/saichler/l8tunnel/go/tun/edge/nodes"
+	"github.com/saichler/l8tunnel/go/tun/sys/importtemplate"
 	"github.com/saichler/l8types/go/ifs"
 )
 
@@ -30,6 +31,7 @@ func ActivateBackend(creds, dbname string, vnic ifs.IVNic) {
 	alerts.Activate(creds, dbname, vnic)
 	nodes.Activate(vnic)
 	issue.Activate(vnic)
+	importtemplate.Activate(creds, dbname, vnic)
 }
 
 // StartMaintenance keeps the TUNNEL_BASE domain present and in line with
