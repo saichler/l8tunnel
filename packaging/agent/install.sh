@@ -2,14 +2,20 @@
 # Installs (or upgrades) the l8tunnel agent as a systemd service.
 #   ./install.sh      asks for the agent token and what to expose, then installs,
 #                     starts the agent and shows how to reach this machine.
-# Unattended: L8TUNNEL_TOKEN=l8t_... EXPOSE=ssh|web|both [WEB_PORT=3000] [NAME=x] ./install.sh
+#                     A package built with a token (build-agent.sh ENROLL_TOKEN_FILE=...)
+#                     asks nothing: it exposes what the package says (ssh+https by
+#                     default) under this machine's host name.
+# Unattended: L8TUNNEL_TOKEN=l8t_... EXPOSE=ssh|web|both|ssh+https [WEB_PORT=3000]
+#             [HTTPS_PORT=443] [NAME=x] ./install.sh
+#   ssh+https: SSH as <name>-ssh, and https://<name>.<domain> passed through
+#   untouched to this machine's own HTTPS server (it serves the certificate).
 set -euo pipefail
 cd "$(dirname "$0")"
 die() { echo "install: $*" >&2; exit 1; }
 if [ "$(id -u)" -ne 0 ]; then
   command -v sudo >/dev/null || die "run as root"
   echo "The installer needs root; asking sudo..."
-  exec sudo --preserve-env=L8TUNNEL_TOKEN,EXPOSE,WEB_PORT,NAME "$0" "$@"
+  exec sudo --preserve-env=L8TUNNEL_TOKEN,EXPOSE,WEB_PORT,HTTPS_PORT,NAME "$0" "$@"
 fi
 command -v systemctl >/dev/null || die "systemd is required"
 want_arch="$(cat ARCH)"
@@ -21,14 +27,66 @@ esac
 DOMAIN="$(cat DOMAIN)"
 RELAY="connect.$DOMAIN:443"
 [ -s RELAY ] && RELAY="$(cat RELAY)"   # e.g. the relay's LAN address
+# reachable: a TCP connection to host:port opens within 5 s.
+reachable() { timeout 5 bash -c "</dev/tcp/${1%:*}/${1##*:}" 2>/dev/null; }
+# A machine on the relay's own network may not reach it by its public
+# address (routers often don't loop back): use the LAN address the package
+# carries when the public one doesn't answer.
+if [ -s LAN_RELAY ] && ! reachable "$RELAY"; then
+  lan="$(cat LAN_RELAY)"; case "$lan" in *:*) ;; *) lan="$lan:443" ;; esac
+  if reachable "$lan"; then
+    echo "$RELAY doesn't answer from here; using the relay's LAN address $lan"
+    RELAY="$lan"
+  fi
+fi
 CONF=/etc/l8tunnel/agent.yaml ENVF=/etc/l8tunnel/agent.env
 interactive=0; [ -t 0 ] && interactive=1
+# A package with a built-in token installs without asking anything.
+if [ -s TOKEN ]; then
+  interactive=0
+  L8TUNNEL_TOKEN="${L8TUNNEL_TOKEN:-$(tr -d '[:space:]' < TOKEN)}"
+fi
+[ -s EXPOSE ] && EXPOSE="${EXPOSE:-$(tr -d '[:space:]' < EXPOSE)}"
 
 install -m 0755 bin/l8tunnel-agent bin/l8tunnel /usr/local/bin/
 install -d -m 0755 /etc/l8tunnel
 install -m 0644 l8tunnel-agent.service /etc/systemd/system/l8tunnel-agent.service
 systemctl daemon-reload
 echo "installed $(/usr/local/bin/l8tunnel-agent version) for relay $RELAY"
+
+# write_config writes agent.yaml for $NAME and $EXPOSE.
+write_config() {
+  {
+    echo "# /etc/l8tunnel/agent.yaml, written by install.sh"
+    echo "relay: $RELAY"
+    case "$RELAY" in
+      "connect.$DOMAIN:"*) ;;
+      *) echo "server_name: connect.$DOMAIN    # the relay's certificate is checked for this name" ;;
+    esac
+    echo "# the token is in $ENVF (root only)"
+    echo "token: \${L8TUNNEL_TOKEN}"
+    echo "status_socket: /run/l8tunnel-agent/status.sock"
+    echo "tunnels:"
+    case "$EXPOSE" in
+      ssh|both)
+        echo "  - name: $NAME"
+        echo "    type: ssh              # this machine's sshd, 127.0.0.1:22" ;;
+      ssh+https)
+        echo "  - name: $NAME-ssh"
+        echo "    type: ssh              # this machine's sshd, 127.0.0.1:22"
+        echo "  - name: $NAME"
+        echo "    type: tls              # https://$NAME.$DOMAIN, passed through to this machine's HTTPS server"
+        echo "    target: 127.0.0.1:$HTTPS_PORT" ;;
+    esac
+    if [ "$EXPOSE" = web ] || [ "$EXPOSE" = both ]; then
+      web_name="$NAME"; [ "$EXPOSE" = both ] && web_name="$NAME-web"
+      echo "  - name: $web_name"
+      echo "    type: http             # https://$web_name.$DOMAIN"
+      echo "    target: $WEB_PORT"
+    fi
+  } > "$CONF"
+  chmod 0644 "$CONF"
+}
 
 if [ -s "$CONF" ] && [ -s "$ENVF" ]; then
   echo "keeping the existing configuration ($CONF)"
@@ -57,13 +115,16 @@ else
     case "${choice:-1}" in 1) EXPOSE=ssh ;; 2) EXPOSE=web ;; 3) EXPOSE=both ;; *) die "no such choice: $choice" ;; esac
   fi
   EXPOSE="${EXPOSE:-ssh}"
+  case "$EXPOSE" in ssh|web|both|ssh+https) ;; *) die "EXPOSE must be ssh, web, both or ssh+https (got $EXPOSE)" ;; esac
+  HTTPS_PORT="${HTTPS_PORT:-443}"
+  case "$HTTPS_PORT" in ''|*[!0-9]*) die "invalid HTTPS_PORT $HTTPS_PORT" ;; esac
   WEB_PORT="${WEB_PORT:-}"
-  if [ "$EXPOSE" != ssh ] && [ -z "$WEB_PORT" ]; then
+  if [ "$EXPOSE" = web ] || [ "$EXPOSE" = both ] && [ -z "$WEB_PORT" ]; then
     [ "$interactive" -eq 1 ] || die "EXPOSE=$EXPOSE needs WEB_PORT"
     read -r -p "the web app's port on this machine [3000]: " WEB_PORT || WEB_PORT=""
     WEB_PORT="${WEB_PORT:-3000}"
   fi
-  case "$WEB_PORT" in ''|*[!0-9]*) [ "$EXPOSE" = ssh ] || die "invalid port $WEB_PORT" ;; esac
+  case "$WEB_PORT" in ''|*[!0-9]*) [ "$EXPOSE" = ssh ] || [ "$EXPOSE" = ssh+https ] || die "invalid port $WEB_PORT" ;; esac
 
   # --- the tunnel name: a DNS label, defaulting to the host name ---
   default_name="$(uname -n | cut -d. -f1 | tr 'A-Z_' 'a-z-' | tr -cd 'a-z0-9-' | sed 's/^-*//; s/-*$//')"
@@ -79,29 +140,7 @@ else
   printf 'L8TUNNEL_TOKEN=%s\n' "$TOKEN" > "$ENVF"
   chmod 0600 "$ENVF"
   umask 022
-  {
-    echo "# /etc/l8tunnel/agent.yaml, written by install.sh"
-    echo "relay: $RELAY"
-    case "$RELAY" in
-      "connect.$DOMAIN:"*) ;;
-      *) echo "server_name: connect.$DOMAIN    # the relay's certificate is checked for this name" ;;
-    esac
-    echo "# the token is in $ENVF (root only)"
-    echo "token: \${L8TUNNEL_TOKEN}"
-    echo "status_socket: /run/l8tunnel-agent/status.sock"
-    echo "tunnels:"
-    if [ "$EXPOSE" = ssh ] || [ "$EXPOSE" = both ]; then
-      echo "  - name: $NAME"
-      echo "    type: ssh              # this machine's sshd, 127.0.0.1:22"
-    fi
-    if [ "$EXPOSE" = web ] || [ "$EXPOSE" = both ]; then
-      web_name="$NAME"; [ "$EXPOSE" = both ] && web_name="$NAME-web"
-      echo "  - name: $web_name"
-      echo "    type: http             # https://$web_name.$DOMAIN"
-      echo "    target: $WEB_PORT"
-    fi
-  } > "$CONF"
-  chmod 0644 "$CONF"
+  write_config
   echo "wrote $CONF"
 fi
 
@@ -109,15 +148,36 @@ if grep -q 'type: ssh' "$CONF" && ! ss -ltnH 'sport = :22' 2>/dev/null | grep -q
   echo "WARNING: nothing listens on port 22 here; start sshd (sudo systemctl enable --now sshd) or SSH won't work" >&2
 fi
 
+# name_taken: the relay refused a tunnel name another machine holds. (grep
+# reads all its input: an early exit would fail the pipeline under pipefail.)
+name_taken() {
+  journalctl -u l8tunnel-agent --since "$since" --no-pager 2>/dev/null | grep -E 'is taken|NAME_TAKEN' >/dev/null
+}
+
+# start_agent restarts the service and waits up to 15 s for it to connect.
+start_agent() {
+  since="$(date '+%Y-%m-%d %H:%M:%S')"
+  systemctl restart l8tunnel-agent
+  ready=0
+  for i in $(seq 1 15); do
+    sleep 1
+    if l8tunnel-agent status --json 2>/dev/null | grep -q '"connected": true'; then ready=1; return; fi
+    name_taken && return
+  done
+  return 0
+}
+
 systemctl enable --quiet l8tunnel-agent
-systemctl restart l8tunnel-agent
 echo "starting the agent..."
-ready=0
-for i in $(seq 1 15); do
-  sleep 1
-  if l8tunnel-agent status --json 2>/dev/null | grep -q '"connected": true'; then ready=1; break; fi
-  systemctl is-active --quiet l8tunnel-agent || break
-done
+start_agent
+# Another machine already has this name: take the name with a short suffix
+# (only for a configuration this run wrote).
+if [ "$ready" -eq 0 ] && [ -n "${NAME:-}" ] && name_taken; then
+  NAME="$NAME-$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')"
+  echo "that name is taken by another machine; using $NAME"
+  write_config
+  start_agent
+fi
 
 echo
 echo "=================================================================="
@@ -131,7 +191,8 @@ if [ "$ready" -eq 1 ]; then
     /"hostname"/ {host=$4; if (type=="ssh" || type=="tcp") {
         split(addr, a, ":"); print " SSH here from anywhere:   ssh -p " a[2] " <user>@" d
         print "   or over port 443:       ssh -o ProxyCommand=\"l8tunnel connect %h\" <user>@" host }
-      else if (type=="http") print " Web app:                  " addr }'
+      else if (type=="http") print " Web app:                  " addr
+      else if (type=="tls") print " HTTPS (served here):      https://" host }'
 else
   echo " The agent didn't connect. Recent log:"
   echo "=================================================================="

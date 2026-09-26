@@ -6,6 +6,15 @@
 # RELAY_ADDR (e.g. 192.168.1.120 for agents on the relay's own network,
 # which avoids the router's loopback path); the relay's certificate is
 # still verified as connect.DOMAIN.
+#
+# ENROLL_TOKEN_FILE=<file> builds a no-questions package: the token in that
+# file goes into the package, and install.sh installs, names the machine
+# after its host name and exposes ENROLL_EXPOSE (default ssh+https: SSH as
+# <host>-ssh and https://<host>.DOMAIN passed through to the machine's own
+# HTTPS server). Anyone holding such a package can register an agent, so
+# give it a token of its own and revoke that token to retire the package.
+# ENROLL_LAN_RELAY=<ip[:port]> is the relay's LAN address, used by machines
+# on its own network when the public name doesn't answer from there.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ARCH="${1:-amd64}"
@@ -23,6 +32,14 @@ if [ -n "$RELAY_ADDR" ]; then
 fi
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
 LABEL="$DOMAIN"; [ -n "$RELAY_ADDR" ] && LABEL="$DOMAIN-via-${RELAY_ADDR%:*}"
+ENROLL_TOKEN_FILE="${ENROLL_TOKEN_FILE:-}"
+ENROLL_EXPOSE="${ENROLL_EXPOSE:-ssh+https}"
+ENROLL_LAN_RELAY="${ENROLL_LAN_RELAY:-}"   # e.g. 192.168.1.121: used when connect.DOMAIN doesn't answer
+if [ -n "$ENROLL_TOKEN_FILE" ]; then
+  grep -Eq '^l8t_[0-9a-f]+_[A-Za-z0-9_-]+$' "$ENROLL_TOKEN_FILE" || { echo "$ENROLL_TOKEN_FILE doesn't hold an agent token" >&2; exit 2; }
+  case "$ENROLL_EXPOSE" in ssh|ssh+https) ;; *) echo "ENROLL_EXPOSE must be ssh or ssh+https" >&2; exit 2 ;; esac
+  LABEL="$LABEL-enroll"
+fi
 NAME="l8tunnel-agent-${LABEL}-${VERSION}-linux-${ARCH}"
 STAGE="dist/$NAME"
 rm -rf "$STAGE" && mkdir -p "$STAGE/bin"
@@ -33,6 +50,12 @@ cp deploy/systemd/l8tunnel-agent.service "$STAGE/"
 echo "$ARCH" > "$STAGE/ARCH"
 echo "$DOMAIN" > "$STAGE/DOMAIN"
 [ -n "$RELAY_ADDR" ] && echo "$RELAY_ADDR" > "$STAGE/RELAY"
+if [ -n "$ENROLL_TOKEN_FILE" ]; then
+  install -m 0600 "$ENROLL_TOKEN_FILE" "$STAGE/TOKEN"
+  echo "$ENROLL_EXPOSE" > "$STAGE/EXPOSE"
+  [ -n "$ENROLL_LAN_RELAY" ] && echo "$ENROLL_LAN_RELAY" > "$STAGE/LAN_RELAY"
+fi
 chmod 0755 "$STAGE"/*.sh
 tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+[ -n "$ENROLL_TOKEN_FILE" ] && echo "no-questions package: token built in, exposes $ENROLL_EXPOSE"
 echo "dist/$NAME.tar.gz  (relay ${RELAY_ADDR:-connect.$DOMAIN:443}${RELAY_ADDR:+, certificate checked as connect.$DOMAIN})"

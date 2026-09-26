@@ -1,6 +1,21 @@
 l8tunnel agent
 ==============
 
+No-questions package (l8tunnel-agent-<domain>-enroll-...)
+  tar xzf l8tunnel-agent-*-enroll-*.tar.gz
+  cd l8tunnel-agent-*-enroll-*/
+  ./install.sh
+That's all: it installs the agent as a system service, connects to the relay
+and registers this machine under its host name:
+  ssh:    ssh -p <port> <user>@<domain>   (install.sh prints the port;
+          the management UI shows it too: Tunnels > Live > Connect)
+  https:  https://<host name>.<domain>     passed through untouched to this
+          machine's own HTTPS server on port 443 (it serves the certificate;
+          until something listens on 443, that address has nothing to show)
+If another machine already has the host name, a short suffix is added.
+Set HTTPS_PORT=8443 (or NAME=x) before ./install.sh to change those.
+
+
 There are two agent packages; use the one that matches where this machine is:
   l8tunnel-agent-<domain>-...             machines anywhere on the internet
   l8tunnel-agent-<domain>-via-<ip>-...    machines on the relay's own network
@@ -34,4 +49,5 @@ Everyday commands
 
 Change the answers:  sudo rm /etc/l8tunnel/agent.yaml /etc/l8tunnel/agent.env && ./install.sh
 Unattended install:  L8TUNNEL_TOKEN=l8t_... EXPOSE=both WEB_PORT=3000 ./install.sh
+                     (EXPOSE: ssh, web, both, or ssh+https as in the no-questions package)
 Uninstall:           ./uninstall.sh   (--purge also deletes the token)
