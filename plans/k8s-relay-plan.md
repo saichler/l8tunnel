@@ -1640,3 +1640,35 @@ Docker or kubectl. It only runs the systemd relay and sshd.
 - **KIND:** the edge runs on the node's host network. Host ports map to it:
   18443 → 443, 18080 → 80, 12222 → 2222, 16000 → 6000 (site tests), and
   22000–22009 → the same ports.
+
+### 16.13 K4 decisions and findings (2026-09-26)
+
+- **The evaluator polls.** Layer 8 has no change subscription for services
+  another process owns (§16.2), and the `*_OFFLINE` conditions are about
+  time anyway. The backend reads the rules, the live tables and the edge
+  tables every 30 s, after a minute's grace at startup.
+  - A table that can't be read skips the conditions that need it; nothing
+    fires on missing data.
+  - Edges that haven't reported for 2 minutes aren't judged, and simulated
+    records never fire.
+  - A watched token or agent with no record at all (records expire; a
+    restarted registry knows only connected agents) counts as offline from
+    the first evaluation that saw none.
+- **Firing:** each target gets `Notify().Send` (the delivery log keeps every
+  attempt, failed ones included), an `alert.fired` event is posted, and
+  `last_fired` is PATCHed, which starts the cooldown. A rule that keeps
+  holding fires again once per cooldown.
+- **The logic is a pure evaluator** (`alerts/evaluate.go`), tested in
+  process. The KIND test checks deliveries in the notify log and that the
+  cooldown holds.
+- **PUT for whole records, PATCH for partial updates.** The first KIND run
+  fired a listener alert for a listener that was gone. The edge's PATCHed
+  report kept the old fields: a PATCH skips zero values and never shrinks a
+  list. Live-table rows and edge reports are the whole record, so they're
+  now replaced with PUT. PATCH stays for partial updates such as
+  `last_fired`.
+- **Two l8reflect fixes, each reproduced by a test first:**
+  - growing a primitive slice built a slice of pointers and panicked
+    (`445d183`)
+  - applying a change to one slice element left the element empty, so a
+    PATCH that added list elements stored blanks (`647e2d1`)
