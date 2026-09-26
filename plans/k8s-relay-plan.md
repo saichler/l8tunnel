@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Approved 2026-09-25; implementation in progress (K0) |
+| **Status** | Approved 2026-09-25; K0-K2 done, K3 next |
 | **Date** | 2026-09-25 |
 | **Builds on** | [PRD.md](PRD.md), [v1.1-plan.md](v1.1-plan.md), the relay and agent install packages |
 | **Rules** | `../l8book/layer-8-guide-lines.md`, `../l8book/layer-8-arch.md` |
@@ -1564,3 +1564,38 @@ Docker or kubectl. It only runs the systemd relay and sshd.
     edge exists (K3).
   - `secrets.sh` also creates the `l8tunnel-cluster` Secret (forward key
     and gateway host key) and never replaces it.
+
+### 16.11 K2 findings (2026-09-26)
+
+- **Service handlers can't keep their own state.** The framework creates
+  handler instances itself, from the type name, so values set in a
+  handler's fields are lost.
+  - Handler state goes through `sla.SetArgs` and is read back from the SLA
+    (`common.ActionStubs.Arg`).
+  - The first KIND run caught this: the registry's and the relays'
+    handlers had nil state.
+- **Agent tokens are looked up live on the handshake.**
+  - A token issued a moment before the agent connects is found at once,
+    and a revoked one is refused at once, with no wait for the pushed
+    refresh.
+  - While the backend is unreachable the relay's cache answers, backing
+    off for 30 s after a failed lookup.
+- **A restarted process rejects older bearer tokens (l8secure).** A process
+  that starts after a user logged in (here, a restarted registry) rejects
+  that user's bearer token with "invalid Token", while processes that were
+  running at login accept it. UI users must log in again after that
+  process restarts.
+  - This is an l8secure behavior, to report to the framework owner
+    (ReportInfraBugs).
+  - The KIND tests log in again after restarting the registry.
+- **Verified in KIND** (8 test groups):
+  - claims and live records, including agent version, transport and state
+  - mode A through the owner's stream port with signed PROXY headers; a
+    second hop and a bad signature are refused
+  - mode B and HTTP forwarded by the other relay
+  - names and ports held across relays during the grace period, and
+    reclaimed through the other relay
+  - the SSH gateway reaching a tunnel on the other relay
+  - operator disconnect, drain and resume
+  - revocation releasing names at once
+  - a registry restart rebuilt from the relays' announcements

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/saichler/l8tunnel/go/tun/common"
+	"github.com/saichler/l8tunnel/go/types/tun"
 	"github.com/saichler/l8types/go/types/l8api"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -56,6 +57,19 @@ func newKindClient(t *testing.T, user, password string) *kindClient {
 		t.Fatalf("login as %s: status %d: %s", user, resp.StatusCode, data)
 	}
 	c.token = out["token"].(string)
+	// A new login's token reaches the other processes shortly after the
+	// web server issues it; wait until the registry accepts it.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		err := c.query(common.AreaLive, common.RelayService, "select * from TunRelay", &tun.TunRelayList{})
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the registry doesn't accept %s's token: %v", user, err)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 	return c
 }
 

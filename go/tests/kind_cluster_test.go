@@ -191,6 +191,9 @@ func TestKindRegistryRestart(t *testing.T) {
 
 	kubectl(t, "delete", "pod", "l8tunnel-registry-0", "--wait=true")
 	kubectl(t, "wait", "--for=condition=Ready", "pod/l8tunnel-registry-0", "--timeout=120s")
+	// A restarted process doesn't know bearer tokens issued before it
+	// started (l8secure; plan §16.11), so log in again.
+	c = newKindClient(t, "admin", "admin")
 	waitUntil(t, 90*time.Second, "record re-announced", func() bool {
 		r := liveTunnel(t, c, name)
 		return r != nil && r.RelayId == kindRelay0 && r.State == tun.TunLiveState_TUN_LIVE_STATE_ACTIVE
