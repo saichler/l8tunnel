@@ -915,6 +915,10 @@ project's own base image. `build.sh` in each binary's directory runs
 
 ### 7.3 Local development (RunLocalScript)
 
+**Waived (X-6, 2026-09-26):** there is no `run-local.sh` and no demo agent;
+development and tests run in KIND. The original plan follows for the
+record.
+
 `go/run-local.sh`, adapted from `l8erp/go/run-local.sh`:
 
 1. Starts the Postgres container.
@@ -1320,8 +1324,9 @@ Everything not listed here complies.
 | X-3 | SingleOwnerDatabaseTable, intent | None any more: `TunLive`/`TunAgent`/`TunRelay` now have one owner, the registry (§4.2) | — | Resolved by design | Resolved |
 | X-4 | PrdCompliance (l8erp layout) | The existing `go/cmd/*` binaries and `go/tunnel/*` packages keep their layout; only new code follows `go/tun/…` | Existing standalone and data-plane code | They are the standalone product and the shared data-plane library, built by the release tarballs, the Dockerfile and the install packages; moving them would break those for no gain | **Approved by you** (2026-09-25) |
 | X-5 | DeploymentArtifacts (own `-security`/`-postgres` base images) | The root `Dockerfile`'s standalone `server`/`agent` images stay distroless | Standalone images only | They never join a vnet or load a security plugin, and aren't part of any Kubernetes deployment in this plan. Every new image uses the base images | **Approved by you** (2026-09-25) |
+| X-6 | RunLocalScript (`go/run-local.sh`) | No local run script and no demo agent (§7.3) | The whole project | Not needed: the cluster is developed and tested in KIND | **Waived by you** (2026-09-26) |
 
-All five are copied into the PRD in K6, so the exceptions stay visible
+All six are copied into the PRD in K6, so the exceptions stay visible
 after this plan is done.
 
 ## 16. K0 outcomes (recorded 2026-09-25, before K1)
