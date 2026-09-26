@@ -60,38 +60,57 @@ func (r *Registry) loop() {
 	}
 }
 
-// reconcile makes the live tables match the engine exactly, removing rows
-// a client wrote or deleted directly.
+// reconcile makes the live tables match the engine exactly: rows the
+// engine has are replaced (or created when missing), rows it doesn't have
+// are deleted.
 func (r *Registry) reconcile() {
 	tunnels, agents, relays := r.Engine.Snapshot()
-	keepT := map[string]bool{}
+	have := func(v *view, key func(interface{}) string) map[string]bool {
+		out := map[string]bool{}
+		for _, e := range v.all() {
+			out[key(e)] = true
+		}
+		return out
+	}
+	tKey := func(e interface{}) string { return e.(*tun.TunLiveTunnel).Name }
+	aKey := func(e interface{}) string { return e.(*tun.TunAgent).AgentId }
+	rKey := func(e interface{}) string { return e.(*tun.TunRelay).RelayId }
+
+	rows, keep := have(r.views.tunnels, tKey), map[string]bool{}
 	for _, t := range tunnels {
-		keepT[t.Name] = true
-		r.views.tunnels.put(t)
+		keep[t.Name] = true
+		r.views.tunnels.apply(t, nil, changeFor(rows[t.Name]))
 	}
-	for _, e := range r.views.tunnels.all() {
-		if t, ok := e.(*tun.TunLiveTunnel); ok && !keepT[t.Name] {
-			r.views.tunnels.remove(&tun.TunLiveTunnel{Name: t.Name})
+	for name := range rows {
+		if !keep[name] {
+			r.views.tunnels.apply(nil, &tun.TunLiveTunnel{Name: name}, claims.Deleted)
 		}
 	}
-	keepA := map[string]bool{}
+	rows, keep = have(r.views.agents, aKey), map[string]bool{}
 	for _, a := range agents {
-		keepA[a.AgentId] = true
-		r.views.agents.put(a)
+		keep[a.AgentId] = true
+		r.views.agents.apply(a, nil, changeFor(rows[a.AgentId]))
 	}
-	for _, e := range r.views.agents.all() {
-		if a, ok := e.(*tun.TunAgent); ok && !keepA[a.AgentId] {
-			r.views.agents.remove(&tun.TunAgent{AgentId: a.AgentId})
+	for id := range rows {
+		if !keep[id] {
+			r.views.agents.apply(nil, &tun.TunAgent{AgentId: id}, claims.Deleted)
 		}
 	}
-	keepR := map[string]bool{}
+	rows, keep = have(r.views.relays, rKey), map[string]bool{}
 	for _, rl := range relays {
-		keepR[rl.RelayId] = true
-		r.views.relays.put(rl)
+		keep[rl.RelayId] = true
+		r.views.relays.apply(rl, nil, changeFor(rows[rl.RelayId]))
 	}
-	for _, e := range r.views.relays.all() {
-		if rl, ok := e.(*tun.TunRelay); ok && !keepR[rl.RelayId] {
-			r.views.relays.remove(&tun.TunRelay{RelayId: rl.RelayId})
+	for id := range rows {
+		if !keep[id] {
+			r.views.relays.apply(nil, &tun.TunRelay{RelayId: id}, claims.Deleted)
 		}
 	}
+}
+
+func changeFor(exists bool) claims.Change {
+	if exists {
+		return claims.Updated
+	}
+	return claims.Created
 }

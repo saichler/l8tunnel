@@ -8,6 +8,7 @@ import (
 	"github.com/saichler/l8services/go/services/base"
 	"github.com/saichler/l8srlz/go/serialize/object"
 	"github.com/saichler/l8tunnel/go/tun/common"
+	"github.com/saichler/l8tunnel/go/tunnel/claims"
 	"github.com/saichler/l8tunnel/go/types/tun"
 	"github.com/saichler/l8types/go/ifs"
 	"github.com/saichler/l8types/go/types/l8api"
@@ -40,15 +41,20 @@ func activateView(vnic ifs.IVNic, name string, item, list proto.Message, pk stri
 	return &view{handler: h, vnic: vnic}
 }
 
-func (v *view) put(elem interface{}) {
-	if resp := v.handler.Post(object.New(nil, elem), v.vnic); resp != nil && resp.Error() != nil {
-		v.vnic.Resources().Logger().Warning("live table update: ", resp.Error().Error())
+// apply mirrors one engine change: POST creates a row, PUT replaces it,
+// DELETE removes it (key holds just the primary key).
+func (v *view) apply(elem, key interface{}, change claims.Change) {
+	var resp ifs.IElements
+	switch change {
+	case claims.Created:
+		resp = v.handler.Post(object.New(nil, elem), v.vnic)
+	case claims.Updated:
+		resp = v.handler.Put(object.New(nil, elem), v.vnic)
+	case claims.Deleted:
+		resp = v.handler.Delete(object.New(nil, key), v.vnic)
 	}
-}
-
-func (v *view) remove(elem interface{}) {
-	if resp := v.handler.Delete(object.New(nil, elem), v.vnic); resp != nil && resp.Error() != nil {
-		v.vnic.Resources().Logger().Warning("live table delete: ", resp.Error().Error())
+	if resp != nil && resp.Error() != nil {
+		v.vnic.Resources().Logger().Warning("live table ", change, ": ", resp.Error().Error())
 	}
 }
 

@@ -42,6 +42,7 @@ type Node struct {
 	log       *slog.Logger
 
 	reloadPending atomic.Bool
+	reported      atomic.Bool // the EdgeNode record exists
 }
 
 // Run starts the edge and blocks until ctx ends.
@@ -61,15 +62,16 @@ func Run(ctx context.Context, vnic ifs.IVNic, version string, logger *slog.Logge
 		return err
 	}
 	// The tunnel base's ports first, so tunnels work before (or without)
-	// the management plane.
+	// the management plane; the ops endpoints too, so liveness probes pass
+	// while the domains load.
 	n.edge.Apply([]*tun.EdgeDomain{bootstrapBase()}, 0)
-	n.reload()
-	n.activateCtl()
 	opsLn, err := net.Listen("tcp", ":"+strconv.Itoa(c.Edge.Ops))
 	if err != nil {
 		return fmt.Errorf("ops listener: %w", err)
 	}
 	go admin.Serve(ctx, opsLn, n.edge.OpsHandler(), logger)
+	n.activateCtl()
+	n.reload()
 	go n.loop(ctx)
 	<-ctx.Done()
 	n.edge.Close()
@@ -174,9 +176,18 @@ func (n *Node) report() {
 	rec := &tun.EdgeNode{EdgeId: n.id, NodeIp: n.nodeIP, Version: n.version, ConfigVersion: st.Version,
 		Listeners: st.Listeners, Backends: st.Backends, TotalConns: st.Accepted, StartedAt: n.startedAt.Unix(),
 		LastSeen: time.Now().Unix()}
+	// POST creates the record once; later reports replace it with PUT. A
+	// PUT that fails (the backend restarted and lost it) creates it again.
+	if n.reported.Load() {
+		if err := l8common.PutEntity(common.EdgeNodeService, common.AreaEdge, rec, n.vnic); err == nil {
+			return
+		}
+	}
 	if _, err := l8common.PostEntity(common.EdgeNodeService, common.AreaEdge, rec, n.vnic); err != nil {
 		n.log.Debug("edge report failed", "error", err)
+		return
 	}
+	n.reported.Store(true)
 }
 
 func (n *Node) saveCache(all []*tun.EdgeDomain) {

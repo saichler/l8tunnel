@@ -2,6 +2,7 @@ package live
 
 import (
 	"github.com/saichler/l8tunnel/go/tun/common"
+	"github.com/saichler/l8tunnel/go/tunnel/claims"
 	"github.com/saichler/l8tunnel/go/types/tun"
 	"github.com/saichler/l8types/go/ifs"
 )
@@ -13,28 +14,16 @@ type sink struct {
 	vnic  ifs.IVNic
 }
 
-func (s *sink) TunnelChanged(r *tun.TunLiveTunnel, deleted bool) {
-	if deleted {
-		s.views.tunnels.remove(&tun.TunLiveTunnel{Name: r.Name})
-		return
-	}
-	s.views.tunnels.put(r)
+func (s *sink) TunnelChanged(r *tun.TunLiveTunnel, change claims.Change) {
+	s.views.tunnels.apply(r, &tun.TunLiveTunnel{Name: r.Name}, change)
 }
 
-func (s *sink) AgentChanged(r *tun.TunAgent, deleted bool) {
-	if deleted {
-		s.views.agents.remove(&tun.TunAgent{AgentId: r.AgentId})
-		return
-	}
-	s.views.agents.put(r)
+func (s *sink) AgentChanged(r *tun.TunAgent, change claims.Change) {
+	s.views.agents.apply(r, &tun.TunAgent{AgentId: r.AgentId}, change)
 }
 
-func (s *sink) RelayChanged(r *tun.TunRelay, deleted bool) {
-	if deleted {
-		s.views.relays.remove(&tun.TunRelay{RelayId: r.RelayId})
-		return
-	}
-	s.views.relays.put(r)
+func (s *sink) RelayChanged(r *tun.TunRelay, change claims.Change) {
+	s.views.relays.apply(r, &tun.TunRelay{RelayId: r.RelayId}, change)
 }
 
 // Command reaches the relays through their TunRlyCtl listener; a command

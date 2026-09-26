@@ -25,7 +25,8 @@ func newRecordingSink() *recordingSink {
 	return &recordingSink{tunnels: map[string]*tun.TunLiveTunnel{}, agents: map[string]*tun.TunAgent{}, relays: map[string]*tun.TunRelay{}}
 }
 
-func (s *recordingSink) TunnelChanged(r *tun.TunLiveTunnel, deleted bool) {
+func (s *recordingSink) TunnelChanged(r *tun.TunLiveTunnel, change claims.Change) {
+	deleted := change == claims.Deleted
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if deleted {
@@ -35,7 +36,8 @@ func (s *recordingSink) TunnelChanged(r *tun.TunLiveTunnel, deleted bool) {
 	}
 }
 
-func (s *recordingSink) AgentChanged(r *tun.TunAgent, deleted bool) {
+func (s *recordingSink) AgentChanged(r *tun.TunAgent, change claims.Change) {
+	deleted := change == claims.Deleted
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if deleted {
@@ -45,7 +47,8 @@ func (s *recordingSink) AgentChanged(r *tun.TunAgent, deleted bool) {
 	}
 }
 
-func (s *recordingSink) RelayChanged(r *tun.TunRelay, deleted bool) {
+func (s *recordingSink) RelayChanged(r *tun.TunRelay, change claims.Change) {
+	deleted := change == claims.Deleted
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if deleted {

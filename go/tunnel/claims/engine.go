@@ -24,11 +24,20 @@ const (
 	DefaultDownRetention    = time.Hour
 )
 
+// Change is what happened to a record.
+type Change int
+
+const (
+	Created Change = iota + 1
+	Updated
+	Deleted
+)
+
 // Sink receives every change, as copies the engine no longer touches.
 type Sink interface {
-	TunnelChanged(rec *tun.TunLiveTunnel, deleted bool)
-	AgentChanged(rec *tun.TunAgent, deleted bool)
-	RelayChanged(rec *tun.TunRelay, deleted bool)
+	TunnelChanged(rec *tun.TunLiveTunnel, change Change)
+	AgentChanged(rec *tun.TunAgent, change Change)
+	RelayChanged(rec *tun.TunRelay, change Change)
 	// Command asks a relay (RelayId set) or every relay to act.
 	Command(cmd *tun.TunCtlCommand)
 }
@@ -155,8 +164,10 @@ func cloneRelay(r *tun.TunRelay) *tun.TunRelay            { return proto.Clone(r
 
 // setTunnel stores rec (indexing its port and domains) and reports it.
 func (e *Engine) setTunnel(rec *tun.TunLiveTunnel) {
+	change := Created
 	if old := e.tunnels[rec.Name]; old != nil {
 		e.unindex(old)
+		change = Updated
 	}
 	e.tunnels[rec.Name] = rec
 	if rec.PublicPort != 0 {
@@ -165,7 +176,7 @@ func (e *Engine) setTunnel(rec *tun.TunLiveTunnel) {
 	for _, d := range rec.Domains {
 		e.byDomain[d] = rec.Name
 	}
-	e.sink.TunnelChanged(cloneTunnel(rec), false)
+	e.sink.TunnelChanged(cloneTunnel(rec), change)
 }
 
 func (e *Engine) deleteTunnel(name string) {
@@ -175,7 +186,7 @@ func (e *Engine) deleteTunnel(name string) {
 	}
 	e.unindex(rec)
 	delete(e.tunnels, name)
-	e.sink.TunnelChanged(cloneTunnel(rec), true)
+	e.sink.TunnelChanged(cloneTunnel(rec), Deleted)
 }
 
 func (e *Engine) unindex(rec *tun.TunLiveTunnel) {
@@ -190,11 +201,19 @@ func (e *Engine) unindex(rec *tun.TunLiveTunnel) {
 }
 
 func (e *Engine) setAgent(a *tun.TunAgent) {
+	change := Created
+	if e.agents[a.AgentId] != nil {
+		change = Updated
+	}
 	e.agents[a.AgentId] = a
-	e.sink.AgentChanged(cloneAgent(a), false)
+	e.sink.AgentChanged(cloneAgent(a), change)
 }
 
 func (e *Engine) setRelay(r *tun.TunRelay) {
+	change := Created
+	if e.relays[r.RelayId] != nil {
+		change = Updated
+	}
 	e.relays[r.RelayId] = r
-	e.sink.RelayChanged(cloneRelay(r), false)
+	e.sink.RelayChanged(cloneRelay(r), change)
 }

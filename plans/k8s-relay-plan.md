@@ -1599,3 +1599,44 @@ Docker or kubectl. It only runs the systemd relay and sshd.
   - operator disconnect, drain and resume
   - revocation releasing names at once
   - a registry restart rebuilt from the relays' announcements
+
+### 16.12 K3 decisions (2026-09-26)
+
+- **The edge core is `tunnel/edge`**, a data-plane package with no Layer 8
+  dependencies, tested in process against real backends and a real relay.
+  The cluster glue is `go/tun/edgenode`: domains, certificates and the live
+  tables in, `EdgeNode` reports out.
+- **Listeners follow the domains.** A mode A range opens one listener per
+  port, and they're reported as one range. A port that can't bind stays
+  in the report with its error; it doesn't stop the edge.
+- **Routing, as in §3.3.** An exact site name wins, then the control name
+  (least-loaded ready relay), then a live tunnel (its relay), then a
+  wildcard site, then any relay on a tunnel-base port. Unknown names get a
+  TLS alert, or a 404 on HTTP ports.
+- **Relays are chosen from the live tables, not from a pool:**
+  - agents go to the ready relay with the fewest sessions
+  - tunnels go to their owner
+  - everything else round-robins across ready relays
+  - draining relays are used only when nothing else is up
+- **Pools:**
+  - Algorithms: smooth weighted round robin, weighted least connections,
+    rendezvous source hash (a client keeps its member, and adding a member
+    moves only a share of the clients), and power-of-two random.
+  - A failed dial marks the member suspect and moves to the next one, which
+    is safe because no client byte has been sent.
+  - Active checks are TCP or HTTP(S), every `health_interval` (default
+    10 s); a member is down after 3 failures and back up after 2 passes.
+- **TERMINATE uses `httpproxy` unchanged**, apart from the new
+  `ErrUnavailable`, which the edge's pools return when no member is
+  healthy (503 page `no-healthy-backend`). The TLS to https backends is
+  done in the pool's `OpenStream`, so `httpproxy` needed no
+  `UpstreamTLS` option.
+- **Certificates** for TERMINATE sites are held in `certs.Set` (exact name,
+  then wildcard, never another domain's). They're loaded from FileStore
+  when a domain's fingerprint changes and cached on `/data` with mode 0600.
+- **`common.LiveView`** is the shared cached reader of the live tables, with
+  a TTL plus a refetch on a miss at most once a second. It replaces the
+  relay link's own copy of the same logic.
+- **KIND:** the edge runs on the node's host network. Host ports map to it:
+  18443 → 443, 18080 → 80, 12222 → 2222, 16000 → 6000 (site tests), and
+  22000–22009 → the same ports.

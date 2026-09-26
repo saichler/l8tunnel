@@ -24,7 +24,7 @@ func (e *Engine) Sweep() {
 			e.lostRelay(id, r)
 		case r.State == tun.TunRelayState_TUN_RELAY_STATE_DOWN && r.LastSeen < now.Add(-e.cfg.DownRetention).Unix():
 			delete(e.relays, id)
-			e.sink.RelayChanged(cloneRelay(r), true)
+			e.sink.RelayChanged(cloneRelay(r), Deleted)
 		}
 	}
 	for name, t := range e.tunnels {
@@ -43,7 +43,7 @@ func (e *Engine) Sweep() {
 			e.setAgent(rec)
 		case a.State == tun.TunAgentState_TUN_AGENT_STATE_OFFLINE && a.LastSeen < now.Add(-e.cfg.OfflineRetention).Unix():
 			delete(e.agents, id)
-			e.sink.AgentChanged(cloneAgent(a), true)
+			e.sink.AgentChanged(cloneAgent(a), Deleted)
 		}
 	}
 }

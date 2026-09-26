@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"sync/atomic"
@@ -55,6 +56,14 @@ func Run(ctx context.Context, vnic ifs.IVNic, version string, logger *slog.Logge
 		return err
 	}
 	n.link = &link{vnic: vnic, relayID: n.relayID, key: key, live: common.NewLiveView(vnic, ownersTTL)}
+	// The ops endpoints come up first, so liveness probes pass while the
+	// relay waits for the management backend.
+	opsLn, err := net.Listen("tcp", ":"+strconv.Itoa(c.Relay.Ops))
+	if err != nil {
+		return fmt.Errorf("ops listener: %w", err)
+	}
+	ops := &opsHandler{}
+	go admin.Serve(ctx, opsLn, ops, logger)
 	n.accounts = newAccounts(vnic, snapshotFile)
 	if err := n.loadAccounts(ctx, logger); err != nil {
 		return err
@@ -73,11 +82,7 @@ func Run(ctx context.Context, vnic ifs.IVNic, version string, logger *slog.Logge
 		return err
 	}
 	n.activateCtl()
-	opsLn, err := net.Listen("tcp", ":"+strconv.Itoa(c.Relay.Ops))
-	if err != nil {
-		return fmt.Errorf("ops listener: %w", err)
-	}
-	go admin.Serve(ctx, opsLn, n.srv.OpsHandler(), logger)
+	ops.set(n.srv.OpsHandler())
 	n.announce()
 	go n.loop(ctx)
 	<-ctx.Done()
@@ -261,4 +266,24 @@ func hostOf(addr string) string {
 		return h
 	}
 	return addr
+}
+
+// opsHandler answers /healthz before the relay exists, then hands every
+// request to the relay's own ops handler.
+type opsHandler struct {
+	h atomic.Pointer[http.Handler]
+}
+
+func (o *opsHandler) set(h http.Handler) { o.h.Store(&h) }
+
+func (o *opsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h := o.h.Load(); h != nil {
+		(*h).ServeHTTP(w, r)
+		return
+	}
+	if r.URL.Path == "/healthz" {
+		fmt.Fprintln(w, "starting")
+		return
+	}
+	http.Error(w, "starting", http.StatusServiceUnavailable)
 }
