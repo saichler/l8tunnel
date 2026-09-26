@@ -47,7 +47,7 @@ const (
 )
 
 // AllowSimulatedEnv set to "true" lets the owning process accept records
-// marked simulated (mock data in run-local.sh and KIND only).
+// marked simulated (mock data, in KIND only).
 const AllowSimulatedEnv = "L8TUNNEL_ALLOW_SIMULATED"
 
 // RequestTimeout is the vnic request timeout, in seconds.

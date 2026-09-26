@@ -9,7 +9,7 @@ import (
 )
 
 // RunMockGenerator uploads the l8tunnel mock data to a running deployment
-// (KIND or run-local.sh), phase by phase.
+// (KIND), phase by phase.
 func RunMockGenerator(address, user, password string, insecure bool) {
 	fmt.Printf("l8tunnel mock data generator\n")
 	fmt.Printf("Server: %s  User: %s\n\n", address, user)

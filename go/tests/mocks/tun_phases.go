@@ -6,7 +6,7 @@ import (
 )
 
 // RunAllPhases runs the phases in dependency order (plan §7.4). The data
-// is meant for a fresh deployment (run-local.sh, a new KIND cluster);
+// is meant for a fresh deployment (a new KIND cluster);
 // names get a run tag and ports a run offset, so running it again against
 // the same deployment usually works too (1 in 9 runs repeats an offset).
 func RunAllPhases(c *Client, s *MockDataStore) error {
