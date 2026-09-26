@@ -1,0 +1,89 @@
+/* Split from base-core.css (file size limit): status indicators,
+   utility classes and animations. */
+
+/* ============================================ */
+/* NOC STATUS INDICATORS */
+/* ============================================ */
+
+.status-indicator {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 8px;
+}
+
+.status-operational {
+    background: var(--status-operational);
+    box-shadow: var(--glow-green);
+}
+
+.status-warning {
+    background: var(--status-warning);
+    box-shadow: var(--glow-amber);
+}
+
+.status-critical {
+    background: var(--status-critical);
+    box-shadow: var(--glow-red);
+    animation: pulse-critical 1s infinite;
+}
+
+.status-offline {
+    background: var(--status-offline);
+}
+
+@keyframes pulse-critical {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* ============================================ */
+/* NOC UTILITY CLASSES */
+/* ============================================ */
+
+.noc-card {
+    background: var(--layer8d-bg-card);
+    border: 1px solid var(--border-emphasis);
+    border-top: 2px solid var(--layer8d-primary);
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.noc-metric {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.noc-metric-label {
+    font-size: 11px;
+    color: var(--layer8d-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 700;
+}
+
+.noc-metric-value {
+    font-size: 18px;
+    color: var(--layer8d-primary);
+    font-weight: 900;
+    font-family: 'Roboto Mono', monospace;
+}
+
+/* ============================================ */
+/* ANIMATIONS */
+/* ============================================ */
+
+@keyframes fade-in-up {
+    0% {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    100% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
