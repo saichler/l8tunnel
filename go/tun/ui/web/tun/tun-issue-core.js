@@ -35,7 +35,7 @@
 
         // issueToken returns the show-once content for a new token.
         issueToken: async function(data) {
-            const resp = await TunData.request('POST', Tun.ISSUE_ENDPOINT, {
+            const resp = await TunData.request('POST', TunData.ISSUE_ENDPOINT, {
                 kind: KIND.TOKEN, tokenName: data.tokenName, tokenDescription: data.tokenDescription || '',
                 policy: data.policy || {}
             });
@@ -48,7 +48,7 @@
 
         // issueCert returns the show-once content for a new certificate.
         issueCert: async function(token, data) {
-            const resp = await TunData.request('POST', Tun.ISSUE_ENDPOINT, {
+            const resp = await TunData.request('POST', TunData.ISSUE_ENDPOINT, {
                 kind: KIND.AGENT_CERT, tokenId: token.tokenId, certDays: data.certDays || 0
             });
             return {
@@ -63,7 +63,7 @@
 
         // revoke revokes a token and returns the success message.
         revoke: async function(tokenId) {
-            const resp = await TunData.request('POST', Tun.ISSUE_ENDPOINT, { kind: KIND.REVOKE, tokenId: tokenId });
+            const resp = await TunData.request('POST', TunData.ISSUE_ENDPOINT, { kind: KIND.REVOKE, tokenId: tokenId });
             return 'Token revoked (' + (resp.revokedCerts || 0) + ' certificates, ' +
                 (resp.removedReservations || 0) + ' reservations removed)';
         },

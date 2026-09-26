@@ -1,0 +1,190 @@
+/*
+© 2025 Sharon Aicler (saichler@gmail.com)
+
+Layer 8 Ecosystem is licensed under the Apache License, Version 2.0.
+*/
+
+/* App shell (header/sidebar/content-area) -- no shared l8ui mobile CSS
+   provides this (verified: l8ui/m/css/ only has component CSS, every real
+   project hand-authors its own shell, e.g. l8erp's app-base/app-header/
+   app-nav/app-sidebar.css). One file, taken from l8secure-scan. .nav-card*/.nav-stat*/.nav-empty-state classes below are
+   already styled by l8ui/m/css/layer8m-nav-cards.css -- not redefined here. */
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: var(--layer8d-bg-light);
+    color: var(--layer8d-text-dark, #1a202c);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.app-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+}
+
+/* Header */
+.mobile-header {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--layer8d-bg-white, #fff);
+    border-bottom: 1px solid var(--layer8d-border, #e2e8f0);
+    z-index: 20;
+}
+
+.header-menu-btn, .header-action-btn {
+    background: none;
+    border: none;
+    padding: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--layer8d-text-medium, #4a5568);
+    cursor: pointer;
+}
+
+.header-menu-btn svg, .header-action-btn svg { width: 22px; height: 22px; }
+
+.header-logo { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.header-logo img { width: 24px; height: 24px; }
+.header-logo-text {
+    font-weight: 700;
+    font-size: 15px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.header-actions { display: flex; align-items: center; gap: 4px; }
+
+/* Sidebar */
+.sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 29;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+}
+.sidebar-overlay.visible { opacity: 1; pointer-events: auto; }
+
+.mobile-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 280px;
+    max-width: 84vw;
+    background: var(--layer8d-bg-white, #fff);
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: 2px 0 12px rgba(0,0,0,0.15);
+}
+.mobile-sidebar.open { transform: translateX(0); }
+
+.sidebar-header { padding: 16px; border-bottom: 1px solid var(--layer8d-border, #e2e8f0); }
+.sidebar-logo { display: flex; align-items: center; gap: 10px; }
+.sidebar-logo img { width: 28px; height: 28px; }
+.sidebar-logo-text { font-weight: 700; font-size: 16px; }
+
+.sidebar-nav { flex: 1; overflow-y: auto; padding: 8px 0; }
+.sidebar-section { padding: 8px 0; }
+.sidebar-section-title {
+    padding: 6px 16px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--layer8d-text-light, #a0aec0);
+}
+.sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    text-decoration: none;
+    color: var(--layer8d-text-dark, #1a202c);
+    font-size: 14px;
+}
+.sidebar-item.active { background: var(--layer8d-bg-light, #f1f5f9); font-weight: 600; }
+.sidebar-item-icon { font-size: 18px; width: 22px; text-align: center; display: inline-flex; justify-content: center; }
+/* Sizing for a real <svg> icon (stroke="currentColor", theme-aware) --
+   emoji render with their own fixed multi-color glyph on every theme
+   and can't be recolored via CSS. */
+.sidebar-item-icon svg { width: 18px; height: 18px; }
+
+.sidebar-user {
+    border-top: 1px solid var(--layer8d-border, #e2e8f0);
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.sidebar-user-info { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.sidebar-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--layer8d-primary, #0ea5e9);
+    color: var(--layer8d-on-primary, #fff);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    flex: none;
+}
+.sidebar-user-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-logout-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: 1px solid var(--layer8d-border, #e2e8f0);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--layer8d-text-medium, #4a5568);
+    cursor: pointer;
+}
+
+/* Content */
+.main-content { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+#content-area { padding: 12px; transition: opacity 0.2s ease; }
+.loading { text-align: center; padding: 40px; color: var(--layer8d-text-light, #a0aec0); }
+
+/* Status badges (Layer8MRenderers.createStatusRenderer output, and
+   Layer8MTable/Layer8MEditTable's own generic statusField badge) */
+.status-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+}
+.status-badge.mobile-status-pending, .status-badge.status-pending { background: var(--layer8d-yellow-bg); color: var(--layer8d-yellow-text); }
+.status-badge.mobile-status-active, .status-badge.status-active { background: var(--layer8d-green-bg); color: var(--layer8d-green-text); }
+.status-badge.mobile-status-terminated, .status-badge.status-terminated { background: var(--layer8d-red-bg); color: var(--layer8d-red-text); }
+.status-badge.mobile-status-warning { background: var(--layer8d-yellow-bg); color: var(--layer8d-yellow-text); }
+.status-badge.mobile-status-inactive, .status-badge.status-inactive { background: var(--layer8d-gray-bg); color: var(--layer8d-gray-text); }
+.status-badge.mobile-status-default { background: var(--layer8d-gray-bg); color: var(--layer8d-gray-text); }
+/* l8ui's mobile view factory defaults statusField to 'status' for every
+   model; no l8tunnel model has one, so the badge would always read
+   "Unknown" (class status-offline). Hidden -- specific enough to win over
+   l8ui's card CSS, which loads after this file. */
+.mobile-edit-table-card .status-badge.status-offline,
+.mobile-table-card .status-badge.status-offline { display: none; }

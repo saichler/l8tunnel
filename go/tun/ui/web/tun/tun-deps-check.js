@@ -33,7 +33,20 @@
         'Layer8SectionConfigs', 'Layer8SectionGenerator', 'Layer8SvgFactory', 'Layer8ViewSwitcher'
     ];
 
-    var REQUIRED_MOBILE = [];
+    var REQUIRED_MOBILE = [
+        'L8NotifyDeliveryLog', 'L8NotifyEnums', 'L8NotifyIntegrationMgmt', 'L8NotifyTargetEditor',
+        'L8Security', 'Layer8ColumnFactory', 'Layer8CsvExport', 'Layer8DConfig', 'Layer8DLogo',
+        'Layer8DModuleFilter', 'Layer8DReferenceRegistry', 'Layer8DRenderers', 'Layer8DUtils',
+        'Layer8DWebSocket', 'Layer8DatepickerGrid', 'Layer8EnumFactory', 'Layer8ExcelExport',
+        'Layer8ExportHelper', 'Layer8FieldParsers', 'Layer8FileUpload', 'Layer8FormChips',
+        'Layer8FormFactory', 'Layer8FormatDisplay', 'Layer8InlineTableState', 'Layer8MAuth',
+        'Layer8MConfig', 'Layer8MConfirm', 'Layer8MDatePicker', 'Layer8MEditTable',
+        'Layer8MFormFields', 'Layer8MForms', 'Layer8MModuleRegistry', 'Layer8MNav',
+        'Layer8MNavCrud', 'Layer8MNavData', 'Layer8MPopup', 'Layer8MReferencePicker',
+        'Layer8MReferenceRegistry', 'Layer8MRenderers', 'Layer8MTable', 'Layer8MUtils',
+        'Layer8MViewFactory', 'Layer8PdfExport', 'Layer8PeriodSelector', 'Layer8QueryBuilder',
+        'Layer8ReferenceConfigResolver', 'Layer8ViewSwitcher'
+    ];
 
     // Run at DOM-ready, not synchronously: some l8ui modules assign their
     // global after an init() that fires on an already-parsed document

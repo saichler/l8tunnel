@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <title>l8tunnel</title>
+    <link rel="icon" href="../l8ui/images/logo.svg" id="app-favicon">
+    <!-- Theme -->
+    <link rel="stylesheet" href="../l8ui/shared/layer8d-theme-tokens.css">
+    <link rel="stylesheet" href="../l8ui/shared/layer8d-theme.css">
+    <!-- App shell -->
+    <link rel="stylesheet" href="css/tun-m.css">
+    <!-- Mobile components -->
+    <link rel="stylesheet" href="../l8ui/m/css/layer8m-popup.css">
+    <link rel="stylesheet" href="../l8ui/m/css/layer8m-confirm.css">
+    <link rel="stylesheet" href="../l8ui/m/css/layer8m-table.css">
+    <link rel="stylesheet" href="../l8ui/m/css/layer8m-edit-table.css">
+    <link rel="stylesheet" href="../l8ui/m/css/layer8m-forms.css">
+    <link rel="stylesheet" href="../l8ui/m/css/layer8m-forms-tabs.css">
+    <link rel="stylesheet" href="../l8ui/shared/layer8d-form-fields.css">
+    <link rel="stylesheet" href="../l8ui/shared/layer8-file-upload.css">
+    <link rel="stylesheet" href="../l8ui/m/css/layer8m-datepicker.css">
+    <link rel="stylesheet" href="../l8ui/m/css/layer8m-reference-picker.css">
+    <link rel="stylesheet" href="../l8ui/m/css/layer8m-nav-cards.css">
+    <link rel="stylesheet" href="../l8ui/shared/layer8-print.css" media="print">
+    <!-- L8Notify (data-only; its CSS is shared by both shells) -->
+    <link rel="stylesheet" href="../l8ui/notify/l8notify-notification.css">
+    <!-- l8tunnel (theme tokens only; the action bar, related lists and show-once secrets) -->
+    <link rel="stylesheet" href="../tun/tun.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="mobile-header">
+            <button class="header-menu-btn" id="menu-toggle">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="3" y1="6" x2="21" y2="6"></line>
+                    <line x1="3" y1="12" x2="21" y2="12"></line>
+                    <line x1="3" y1="18" x2="21" y2="18"></line>
+                </svg>
+            </button>
+            <div class="header-logo">
+                <img src="../l8ui/images/logo.svg" alt="l8tunnel" id="app-header-logo">
+                <span class="header-logo-text">l8tunnel</span>
+            </div>
+            <div class="header-actions">
+                <div class="layer8d-theme-picker">
+                    <button class="layer8d-theme-btn header-action-btn" onclick="Layer8DThemeSwitcher.toggleDropdown()" aria-label="Choose theme" title="Choose theme">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a7 7 0 0 0 0 20V2z"/></svg>
+                    </button>
+                    <div class="layer8d-theme-menu"></div>
+                </div>
+                <button class="header-action-btn" id="refresh-btn" title="Refresh">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M23 4v6h-6"></path>
+                        <path d="M1 20v-6h6"></path>
+                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+        <aside class="mobile-sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo">
+                    <img src="../l8ui/images/logo.svg" alt="l8tunnel" id="app-sidebar-logo">
+                    <span class="sidebar-logo-text">l8tunnel</span>
+                </div>
+            </div>
+            <nav class="sidebar-nav">
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">Main</div>
+                    <a href="#dashboard" class="sidebar-item active" data-section="dashboard">
+                        <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg></span>
+                        Dashboard
+                    </a>
+                </div>
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">l8tunnel</div>
+                    <a href="#dashboard" class="sidebar-item" data-section="dashboard" data-module="tunnels">
+                        <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10a8 8 0 0 1 16 0v10"/><path d="M8 20v-9a4 4 0 0 1 8 0v9"/></svg></span>
+                        Tunnels
+                    </a>
+                    <a href="#dashboard" class="sidebar-item" data-section="dashboard" data-module="access">
+                        <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M17 6l3 3M14 9l3 3"/></svg></span>
+                        Access
+                    </a>
+                    <a href="#dashboard" class="sidebar-item" data-section="dashboard" data-module="edge">
+                        <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg></span>
+                        Edge
+                    </a>
+                    <a href="#dashboard" class="sidebar-item" data-section="dashboard" data-module="alerts">
+                        <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></span>
+                        Alerts
+                    </a>
+                    <a href="#dashboard" class="sidebar-item" data-section="dashboard" data-module="system">
+                        <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.2 4.2l2.8 2.8M17 17l2.8 2.8M1 12h4M19 12h4M4.2 19.8 7 17M17 7l2.8-2.8"/></svg></span>
+                        System
+                    </a>
+                </div>
+            </nav>
+            <div class="sidebar-user">
+                <div class="sidebar-user-info">
+                    <div class="sidebar-avatar" id="user-avatar">U</div>
+                    <div class="sidebar-user-details">
+                        <div class="sidebar-user-name" id="user-name">User</div>
+                    </div>
+                </div>
+                <button class="sidebar-logout-btn" onclick="MobileApp.logout()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                        <polyline points="16 17 21 12 16 7"></polyline>
+                        <line x1="21" y1="12" x2="9" y2="12"></line>
+                    </svg>
+                    Logout
+                </button>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <div id="content-area">
+                <div class="loading">Loading</div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Theme and Logo -->
+    <script src="../l8ui/shared/layer8d-theme-switcher.js"></script>
+    <script src="../l8ui/shared/layer8d-logo.js"></script>
+    <script>Layer8DThemeSwitcher.init();</script>
+    <!-- Mobile core -->
+    <script src="../l8ui/m/js/layer8m-config.js"></script>
+    <script src="../l8ui/m/js/layer8m-auth.js"></script>
+    <script src="../l8ui/m/js/layer8m-utils.js"></script>
+    <!-- Desktop shared utilities (the l8tunnel enum, column and form files are shared) -->
+    <script src="../l8ui/shared/layer8d-config.js"></script>
+    <script src="../l8ui/shared/layer8d-utils.js"></script>
+    <script src="../l8ui/shared/layer8-query-builder.js"></script>
+    <script src="../l8ui/shared/layer8d-renderers.js"></script>
+    <script src="../l8ui/shared/layer8d-reference-registry.js"></script>
+    <script src="../l8ui/shared/layer8d-websocket.js"></script>
+    <script src="../l8ui/shared/layer8-field-parsers.js"></script>
+    <!-- Factories -->
+    <script src="../l8ui/shared/layer8-enum-factory.js"></script>
+    <script src="../l8ui/shared/layer8-ref-factory.js"></script>
+    <script src="../l8ui/shared/layer8-column-factory.js"></script>
+    <script src="../l8ui/shared/layer8-form-factory.js"></script>
+    <script src="../l8ui/shared/layer8-form-factory-presets.js"></script>
+    <!-- Mobile module registry -->
+    <script src="../l8ui/m/js/layer8m-module-registry.js"></script>
+    <!-- Mobile components -->
+    <script src="../l8ui/m/js/layer8m-popup.js"></script>
+    <script src="../l8ui/m/js/layer8m-confirm.js"></script>
+    <script src="../l8ui/m/js/layer8m-data-source.js"></script>
+    <script src="../l8ui/m/js/layer8m-table.js"></script>
+    <script src="../l8ui/m/js/layer8m-table-touch.js"></script>
+    <script src="../l8ui/m/js/layer8m-table-realtime.js"></script>
+    <script src="../l8ui/m/js/layer8m-edit-table.js"></script>
+    <script src="../l8ui/shared/layer8-format-display.js"></script>
+    <script src="../l8ui/m/js/layer8m-forms-fields.js"></script>
+    <script src="../l8ui/shared/layer8-period-selector.js"></script>
+    <script src="../l8ui/shared/layer8-form-chips.js"></script>
+    <script src="../l8ui/m/js/layer8m-forms-fields-ext.js"></script>
+    <script src="../l8ui/m/js/layer8m-forms-fields-reference.js"></script>
+    <script src="../l8ui/m/js/layer8m-forms.js"></script>
+    <script src="../l8ui/shared/layer8-inline-table-state.js"></script>
+    <script src="../l8ui/m/js/layer8m-forms-inline.js"></script>
+    <script src="../l8ui/shared/layer8-datepicker-grid.js"></script>
+    <script src="../l8ui/m/js/layer8m-datepicker.js"></script>
+    <script src="../l8ui/m/js/layer8m-reference-registry.js"></script>
+    <!-- l8tunnel reference registry -->
+    <script src="js/tun/reference-registry-tun-m.js"></script>
+    <script src="../l8ui/shared/layer8-reference-config-resolver.js"></script>
+    <script src="../l8ui/m/js/layer8m-reference-picker.js"></script>
+    <script src="../l8ui/m/js/layer8m-renderers.js"></script>
+    <!-- Shared: file upload, CSV export -->
+    <script src="../l8ui/shared/layer8-file-upload.js"></script>
+    <script src="../l8ui/shared/layer8-csv-export.js"></script>
+    <script src="../l8ui/shared/layer8-excel-export.js"></script>
+    <script src="../l8ui/shared/layer8-pdf-export.js"></script>
+    <script src="../l8ui/shared/layer8-export-helper.js"></script>
+    <!-- L8Notify (data-only, both shells) -->
+    <script src="../l8ui/notify/l8notify-enums.js"></script>
+    <script src="../l8ui/notify/l8notify-integration-mgmt.js"></script>
+    <script src="../l8ui/notify/l8notify-delivery-log.js"></script>
+    <script src="../l8ui/notify/l8notify-target-editor.js"></script>
+    <!-- l8tunnel module data: the desktop enums, columns and forms -->
+    <script src="../tun/tun-icons.js"></script>
+    <script src="../tun/tun-data.js"></script>
+    <script src="../tun/tun-forms-util.js"></script>
+    <script src="../tun/live/live-enums.js"></script>
+    <script src="../tun/access/access-enums.js"></script>
+    <script src="../tun/edge/edge-enums.js"></script>
+    <script src="../tun/alerts/alerts-enums.js"></script>
+    <script src="../tun/live/live-columns.js"></script>
+    <script src="../tun/access/access-columns.js"></script>
+    <script src="../tun/edge/edge-columns.js"></script>
+    <script src="../tun/alerts/alerts-columns.js"></script>
+    <script src="../tun/live/live-forms.js"></script>
+    <script src="../tun/access/access-forms.js"></script>
+    <script src="../tun/edge/edge-forms.js"></script>
+    <script src="../tun/alerts/alerts-forms.js"></script>
+    <!-- SYS: l8security enums, columns and forms (with the security events) -->
+    <script src="../l8ui/sys/security/l8security-enums.js"></script>
+    <script src="../l8ui/sys/security/l8security-columns.js"></script>
+    <script src="../l8ui/sys/security/l8security-forms.js"></script>
+    <script src="../l8ui/sys/security/l8security-events-enums.js"></script>
+    <script src="../l8ui/sys/security/l8security-events-columns.js"></script>
+    <!-- l8tunnel shared behavior and the mobile module registries -->
+    <script src="../tun/tun-actions-core.js"></script>
+    <script src="../tun/tun-issue-core.js"></script>
+    <script src="../tun/tun-dashboard-core.js"></script>
+    <script src="../tun/tun-key-download.js"></script>
+    <script src="js/tun/tun-modules-m.js"></script>
+    <script src="js/tun/tun-sys-m.js"></script>
+    <!-- Toggle tree and module filter -->
+    <script src="../l8ui/shared/layer8d-toggle-tree.js"></script>
+    <script src="../l8ui/shared/layer8d-module-filter.js"></script>
+    <!-- Navigation core (before the nav config) -->
+    <script src="../l8ui/m/js/layer8m-nav-crud.js"></script>
+    <script src="../l8ui/m/js/layer8m-nav-data.js"></script>
+    <script src="../l8ui/m/js/layer8m-nav.js"></script>
+    <!-- Navigation config (after the nav core) -->
+    <script src="nav-configs/layer8m-nav-config-tun.js"></script>
+    <!-- Mobile views -->
+    <script src="../l8ui/m/js/layer8m-view-factory.js"></script>
+    <script src="../l8ui/shared/layer8-view-switcher.js"></script>
+    <!-- l8tunnel mobile behavior and dashboard -->
+    <script src="js/tun/tun-mobile.js"></script>
+    <script src="js/tun/tun-dashboard-m.js"></script>
+    <!-- Startup dependency check (FailFastNoSilentFallback), before app init -->
+    <script src="../tun/tun-deps-check.js"></script>
+    <!-- App -->
+    <script src="js/app-core.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>l8tunnel</title>
+    <script>
+        var token = sessionStorage.getItem('bearerToken') || localStorage.getItem('bearerToken');
+        window.location.href = token ? 'app.html' : '../l8ui/login/';
+    </script>
+</head>
+<body><p>Redirecting to <a href="../l8ui/login/">l8tunnel</a>...</p></body>
+</html>

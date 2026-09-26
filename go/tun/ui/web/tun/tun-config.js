@@ -51,9 +51,4 @@
         },
         submodules: ['TunLive', 'TunAccess', 'TunEdge', 'TunAlerts']
     });
-
-    // Action services (POST only): TunCtl carries operator commands to the
-    // registry, TunIssue creates tokens and certificates.
-    Tun.CTL_ENDPOINT = '/42/TunCtl';
-    Tun.ISSUE_ENDPOINT = '/40/TunIssue';
 })();

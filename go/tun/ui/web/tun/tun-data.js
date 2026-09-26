@@ -9,8 +9,13 @@
     const TunData = {
         resolve: null,
 
+        // Action services (POST only): TunCtl carries operator commands to
+        // the registry, TunIssue creates tokens and certificates.
+        CTL_ENDPOINT: '/42/TunCtl',
+        ISSUE_ENDPOINT: '/40/TunIssue',
+
         headers: function() {
-            const token = sessionStorage.getItem('bearerToken');
+            const token = sessionStorage.getItem('bearerToken') || localStorage.getItem('bearerToken');
             return { 'Authorization': token ? 'Bearer ' + token : '', 'Content-Type': 'application/json' };
         },
 

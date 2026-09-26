@@ -13,7 +13,7 @@
         return {
             label: label, danger: true, confirm: confirm,
             run: async () => {
-                await TunData.request('POST', Tun.CTL_ENDPOINT, Object.assign({ requestedBy: TunData.currentUser() }, cmd));
+                await TunData.request('POST', TunData.CTL_ENDPOINT, Object.assign({ requestedBy: TunData.currentUser() }, cmd));
                 return label + ': done';
             }
         };
