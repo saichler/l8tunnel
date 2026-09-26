@@ -1,24 +1,33 @@
-# KIND mode (K8sRules): like bare-metal, but with KIND's own "standard"
-# storage class. Every per-node workload is a StatefulSet with
-# podAntiAffinity (one pod per node) and volumeClaimTemplates; replicas 1
-# matches kind-start.sh's single-node cluster. In KIND every l8tunnel
-# process uses hostNetwork: kindnet doesn't carry the vnet's discovery
-# between the pod network and the host network (the same fix l8alarms and
-# secscan use).
+# Bare-metal mode (K8sRules): StatefulSets with podAntiAffinity (one pod
+# per node) and volumeClaimTemplates on rancher's local-path provisioner:
+#   kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
 #
-# Deployed: vnet, the logs network and its agent, backend, web, registry,
-# two relays and the edge. Every process writes its logs under
-# /data/logs/l8tunnel (the security config's log directory), a hostPath
-# shared on the node, where the log agent collects them. The relays run on
-# the pod network (two replicas on one node can't share host ports) and
-# reach the vnet at NODE_IP; the per-relay NodePort Services let the tests
-# reach each relay directly. On one node the edge needs no node label.
+# The edge and the web UI run only on the node labeled
+# l8tunnel.io/edge=true (k8s/label-edge.sh <node>): the node the router
+# forwards the public ports to. The relays run on the pod network, spread
+# across nodes, and reach the vnet at NODE_IP. Every process writes its
+# logs under /data/logs/l8tunnel, a hostPath the log agent on each node
+# collects.
+#
+# cluster.yaml below uses the production tunnel domain; upload its
+# certificate on the TUNNEL_BASE row in Edge > Domains.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: l8tunnel
   labels:
     name: l8tunnel
+
+---
+
+# Local-path storage for the per-pod data volumes.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: l8tunnel-local-storage
+provisioner: rancher.io/local-path
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
 
 ---
 
@@ -32,16 +41,16 @@ metadata:
     app: l8tunnel
 data:
   cluster.yaml: |
-    base_domain: tunnel.kind.test
+    base_domain: layer8-tunnel.info
     reserved_names: [www, admin]
     public:
       gateway: 2222
     agent_ca:
       cert: /etc/l8tunnel/agent-ca/ca.crt
       key: /etc/l8tunnel/agent-ca/ca.key
-    # KIND's pod network and its docker network (NodePort traffic arrives
-    # from the node).
-    trusted_proxies: [10.244.0.0/16, 172.16.0.0/12]
+    # The pod network and the node network send the edge's PROXY headers;
+    # narrow these to your cluster's CIDRs.
+    trusted_proxies: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
 
 ---
 
@@ -99,7 +108,7 @@ spec:
       spec:
         accessModes:
           - ReadWriteOnce
-        storageClassName: standard
+        storageClassName: l8tunnel-local-storage
         resources:
           requests:
             storage: 1Gi
@@ -160,7 +169,7 @@ spec:
       spec:
         accessModes:
           - ReadWriteOnce
-        storageClassName: standard
+        storageClassName: l8tunnel-local-storage
         resources:
           requests:
             storage: 1Gi
@@ -221,7 +230,7 @@ spec:
       spec:
         accessModes:
           - ReadWriteOnce
-        storageClassName: standard
+        storageClassName: l8tunnel-local-storage
         resources:
           requests:
             storage: 1Gi
@@ -259,8 +268,6 @@ spec:
                   fieldPath: status.hostIP
             - name: L8TUNNEL_CLUSTER_CONFIG
               value: /etc/l8tunnel/cluster/cluster.yaml
-            - name: L8TUNNEL_ALLOW_SIMULATED
-              value: "true"
           volumeMounts:
             - name: hdata
               mountPath: /data
@@ -290,7 +297,7 @@ spec:
       spec:
         accessModes:
           - ReadWriteOnce
-        storageClassName: standard
+        storageClassName: l8tunnel-local-storage
         resources:
           requests:
             storage: 5Gi
@@ -317,6 +324,8 @@ spec:
         app: l8tunnel-web
     spec:
       hostNetwork: true
+      nodeSelector:
+        l8tunnel.io/edge: "true"
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -351,7 +360,7 @@ spec:
       spec:
         accessModes:
           - ReadWriteOnce
-        storageClassName: standard
+        storageClassName: l8tunnel-local-storage
         resources:
           requests:
             storage: 1Gi
@@ -389,8 +398,6 @@ spec:
                   fieldPath: status.hostIP
             - name: L8TUNNEL_CLUSTER_CONFIG
               value: /etc/l8tunnel/cluster/cluster.yaml
-            - name: L8TUNNEL_ALLOW_SIMULATED
-              value: "true"
           volumeMounts:
             - name: hdata
               mountPath: /data
@@ -413,7 +420,7 @@ spec:
       spec:
         accessModes:
           - ReadWriteOnce
-        storageClassName: standard
+        storageClassName: l8tunnel-local-storage
         resources:
           requests:
             storage: 1Gi
@@ -441,6 +448,15 @@ spec:
         app: l8tunnel-relay
     spec:
       terminationGracePeriodSeconds: 60
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: l8tunnel-relay
+                topologyKey: kubernetes.io/hostname
       containers:
         - name: l8tunnel-relay
           image: "saichler/l8tunnel-relay:latest"
@@ -517,7 +533,7 @@ spec:
       spec:
         accessModes:
           - ReadWriteOnce
-        storageClassName: standard
+        storageClassName: l8tunnel-local-storage
         resources:
           requests:
             storage: 1Gi
@@ -568,9 +584,11 @@ spec:
     - from:
         - podSelector: {}
         - ipBlock:
-            cidr: 10.244.0.0/16
+            cidr: 10.0.0.0/8
         - ipBlock:
             cidr: 172.16.0.0/12
+        - ipBlock:
+            cidr: 192.168.0.0/16
       ports:
         - port: 8443
           protocol: TCP
@@ -582,62 +600,6 @@ spec:
           protocol: TCP
         - port: 9100
           protocol: TCP
-
----
-
-# KIND tests: relay 0 straight from the host.
-apiVersion: v1
-kind: Service
-metadata:
-  namespace: l8tunnel
-  name: l8tunnel-relay-0
-  labels:
-    app: l8tunnel-relay
-spec:
-  type: NodePort
-  selector:
-    statefulset.kubernetes.io/pod-name: l8tunnel-relay-0
-  ports:
-    - name: tls
-      port: 8443
-      targetPort: 8443
-      nodePort: 30443
-    - name: stream
-      port: 8444
-      targetPort: 8444
-      nodePort: 30444
-    - name: gateway
-      port: 2222
-      targetPort: 2222
-      nodePort: 30222
-
----
-
-# KIND tests: relay 1 straight from the host.
-apiVersion: v1
-kind: Service
-metadata:
-  namespace: l8tunnel
-  name: l8tunnel-relay-1
-  labels:
-    app: l8tunnel-relay
-spec:
-  type: NodePort
-  selector:
-    statefulset.kubernetes.io/pod-name: l8tunnel-relay-1
-  ports:
-    - name: tls
-      port: 8443
-      targetPort: 8443
-      nodePort: 31443
-    - name: stream
-      port: 8444
-      targetPort: 8444
-      nodePort: 31444
-    - name: gateway
-      port: 2222
-      targetPort: 2222
-      nodePort: 31222
 
 ---
 
@@ -663,6 +625,8 @@ spec:
         app: l8tunnel-edge
     spec:
       hostNetwork: true
+      nodeSelector:
+        l8tunnel.io/edge: "true"
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -723,7 +687,7 @@ spec:
       spec:
         accessModes:
           - ReadWriteOnce
-        storageClassName: standard
+        storageClassName: l8tunnel-local-storage
         resources:
           requests:
             storage: 1Gi

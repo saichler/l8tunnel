@@ -1,24 +1,46 @@
-# KIND mode (K8sRules): like bare-metal, but with KIND's own "standard"
-# storage class. Every per-node workload is a StatefulSet with
-# podAntiAffinity (one pod per node) and volumeClaimTemplates; replicas 1
-# matches kind-start.sh's single-node cluster. In KIND every l8tunnel
-# process uses hostNetwork: kindnet doesn't carry the vnet's discovery
-# between the pod network and the host network (the same fix l8alarms and
-# secscan use).
+# GKE mode (K8sRules): per-node workloads are DaemonSets, the backend and
+# registry single StatefulSets, the relays a Deployment of two, all on one
+# shared persistent disk claim (l8tunnel-data) mounted at /data.
 #
-# Deployed: vnet, the logs network and its agent, backend, web, registry,
-# two relays and the edge. Every process writes its logs under
-# /data/logs/l8tunnel (the security config's log directory), a hostPath
-# shared on the node, where the log agent collects them. The relays run on
-# the pod network (two replicas on one node can't share host ports) and
-# reach the vnet at NODE_IP; the per-relay NodePort Services let the tests
-# reach each relay directly. On one node the edge needs no node label.
+# The edge and the web UI run only on the node labeled
+# l8tunnel.io/edge=true (k8s/label-edge.sh <node>): give that node a
+# static external IP for the tunnel domain. Every process writes its logs
+# under /data/logs/l8tunnel, a hostPath the log agent on each node
+# collects.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: l8tunnel
   labels:
     name: l8tunnel
+
+---
+
+# Persistent disks for the shared data claim.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: l8tunnel-storage
+provisioner: kubernetes.io/gce-pd
+parameters:
+  type: pd-standard
+reclaimPolicy: Retain
+
+---
+
+# The data volume every l8tunnel process mounts at /data.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  namespace: l8tunnel
+  name: l8tunnel-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: l8tunnel-storage
+  resources:
+    requests:
+      storage: 20Gi
 
 ---
 
@@ -32,30 +54,28 @@ metadata:
     app: l8tunnel
 data:
   cluster.yaml: |
-    base_domain: tunnel.kind.test
+    base_domain: layer8-tunnel.info
     reserved_names: [www, admin]
     public:
       gateway: 2222
     agent_ca:
       cert: /etc/l8tunnel/agent-ca/ca.crt
       key: /etc/l8tunnel/agent-ca/ca.key
-    # KIND's pod network and its docker network (NodePort traffic arrives
-    # from the node).
-    trusted_proxies: [10.244.0.0/16, 172.16.0.0/12]
+    # The GKE pod and node ranges (VPC-native); narrow these to your
+    # cluster's CIDRs.
+    trusted_proxies: [10.0.0.0/8]
 
 ---
 
 # The vnet: the switch every l8tunnel vnic connects through.
 apiVersion: apps/v1
-kind: StatefulSet
+kind: DaemonSet
 metadata:
   namespace: l8tunnel
   name: l8tunnel-vnet
   labels:
     app: l8tunnel-vnet
 spec:
-  serviceName: l8tunnel-vnet
-  replicas: 1
   selector:
     matchLabels:
       app: l8tunnel-vnet
@@ -65,13 +85,6 @@ spec:
         app: l8tunnel-vnet
     spec:
       hostNetwork: true
-      affinity:
-        podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchLabels:
-                  app: l8tunnel-vnet
-              topologyKey: kubernetes.io/hostname
       containers:
         - name: l8tunnel-vnet
           image: "saichler/l8tunnel-vnet:latest"
@@ -89,34 +102,25 @@ spec:
             - name: logs
               mountPath: /data/logs/l8tunnel
       volumes:
+        - name: hdata
+          persistentVolumeClaim:
+            claimName: l8tunnel-data
         - name: logs
           hostPath:
             path: /var/log/l8tunnel
             type: DirectoryOrCreate
-  volumeClaimTemplates:
-    - metadata:
-        name: hdata
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        storageClassName: standard
-        resources:
-          requests:
-            storage: 1Gi
 
 ---
 
 # The logs network: the log service System > Logs reads.
 apiVersion: apps/v1
-kind: StatefulSet
+kind: DaemonSet
 metadata:
   namespace: l8tunnel
   name: l8tunnel-log-vnet
   labels:
     app: l8tunnel-log-vnet
 spec:
-  serviceName: l8tunnel-log-vnet
-  replicas: 1
   selector:
     matchLabels:
       app: l8tunnel-log-vnet
@@ -126,13 +130,6 @@ spec:
         app: l8tunnel-log-vnet
     spec:
       hostNetwork: true
-      affinity:
-        podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchLabels:
-                  app: l8tunnel-log-vnet
-              topologyKey: kubernetes.io/hostname
       containers:
         - name: l8tunnel-log-vnet
           image: "saichler/l8tunnel-log-vnet:latest"
@@ -150,34 +147,25 @@ spec:
             - name: logs
               mountPath: /data/logs/l8tunnel
       volumes:
+        - name: hdata
+          persistentVolumeClaim:
+            claimName: l8tunnel-data
         - name: logs
           hostPath:
             path: /var/log/l8tunnel
             type: DirectoryOrCreate
-  volumeClaimTemplates:
-    - metadata:
-        name: hdata
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        storageClassName: standard
-        resources:
-          requests:
-            storage: 1Gi
 
 ---
 
 # Collects the shared log directory on its node for the logs network.
 apiVersion: apps/v1
-kind: StatefulSet
+kind: DaemonSet
 metadata:
   namespace: l8tunnel
   name: l8tunnel-log-agent
   labels:
     app: l8tunnel-log-agent
 spec:
-  serviceName: l8tunnel-log-agent
-  replicas: 1
   selector:
     matchLabels:
       app: l8tunnel-log-agent
@@ -187,13 +175,6 @@ spec:
         app: l8tunnel-log-agent
     spec:
       hostNetwork: true
-      affinity:
-        podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchLabels:
-                  app: l8tunnel-log-agent
-              topologyKey: kubernetes.io/hostname
       containers:
         - name: l8tunnel-log-agent
           image: "saichler/l8tunnel-log-agent:latest"
@@ -211,20 +192,13 @@ spec:
             - name: logs
               mountPath: /data/logs/l8tunnel
       volumes:
+        - name: hdata
+          persistentVolumeClaim:
+            claimName: l8tunnel-data
         - name: logs
           hostPath:
             path: /var/log/l8tunnel
             type: DirectoryOrCreate
-  volumeClaimTemplates:
-    - metadata:
-        name: hdata
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        storageClassName: standard
-        resources:
-          requests:
-            storage: 1Gi
 
 ---
 
@@ -259,8 +233,6 @@ spec:
                   fieldPath: status.hostIP
             - name: L8TUNNEL_CLUSTER_CONFIG
               value: /etc/l8tunnel/cluster/cluster.yaml
-            - name: L8TUNNEL_ALLOW_SIMULATED
-              value: "true"
           volumeMounts:
             - name: hdata
               mountPath: /data
@@ -273,6 +245,9 @@ spec:
               mountPath: /etc/l8tunnel/agent-ca
               readOnly: true
       volumes:
+        - name: hdata
+          persistentVolumeClaim:
+            claimName: l8tunnel-data
         - name: logs
           hostPath:
             path: /var/log/l8tunnel
@@ -284,30 +259,18 @@ spec:
           secret:
             secretName: l8tunnel-agent-ca
             defaultMode: 256
-  volumeClaimTemplates:
-    - metadata:
-        name: hdata
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        storageClassName: standard
-        resources:
-          requests:
-            storage: 5Gi
 
 ---
 
 # The web server: REST API, UI, and FileStore (exactly one instance).
 apiVersion: apps/v1
-kind: StatefulSet
+kind: DaemonSet
 metadata:
   namespace: l8tunnel
   name: l8tunnel-web
   labels:
     app: l8tunnel-web
 spec:
-  serviceName: l8tunnel-web
-  replicas: 1
   selector:
     matchLabels:
       app: l8tunnel-web
@@ -317,13 +280,8 @@ spec:
         app: l8tunnel-web
     spec:
       hostNetwork: true
-      affinity:
-        podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchLabels:
-                  app: l8tunnel-web
-              topologyKey: kubernetes.io/hostname
+      nodeSelector:
+        l8tunnel.io/edge: "true"
       containers:
         - name: l8tunnel-web
           image: "saichler/l8tunnel-web:latest"
@@ -341,20 +299,13 @@ spec:
             - name: logs
               mountPath: /data/logs/l8tunnel
       volumes:
+        - name: hdata
+          persistentVolumeClaim:
+            claimName: l8tunnel-data
         - name: logs
           hostPath:
             path: /var/log/l8tunnel
             type: DirectoryOrCreate
-  volumeClaimTemplates:
-    - metadata:
-        name: hdata
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        storageClassName: standard
-        resources:
-          requests:
-            storage: 1Gi
 
 ---
 
@@ -389,8 +340,6 @@ spec:
                   fieldPath: status.hostIP
             - name: L8TUNNEL_CLUSTER_CONFIG
               value: /etc/l8tunnel/cluster/cluster.yaml
-            - name: L8TUNNEL_ALLOW_SIMULATED
-              value: "true"
           volumeMounts:
             - name: hdata
               mountPath: /data
@@ -400,6 +349,9 @@ spec:
               mountPath: /etc/l8tunnel/cluster
               readOnly: true
       volumes:
+        - name: hdata
+          persistentVolumeClaim:
+            claimName: l8tunnel-data
         - name: logs
           hostPath:
             path: /var/log/l8tunnel
@@ -407,31 +359,19 @@ spec:
         - name: cluster
           configMap:
             name: l8tunnel-cluster
-  volumeClaimTemplates:
-    - metadata:
-        name: hdata
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        storageClassName: standard
-        resources:
-          requests:
-            storage: 1Gi
 
 ---
 
 # The relays: agent sessions and tunnel traffic, on the pod network.
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   namespace: l8tunnel
   name: l8tunnel-relay
   labels:
     app: l8tunnel-relay
 spec:
-  serviceName: l8tunnel-relay
   replicas: 2
-  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app: l8tunnel-relay
@@ -496,6 +436,9 @@ spec:
               mountPath: /etc/l8tunnel/cluster-secret
               readOnly: true
       volumes:
+        - name: hdata
+          persistentVolumeClaim:
+            claimName: l8tunnel-data
         - name: logs
           hostPath:
             path: /var/log/l8tunnel
@@ -511,16 +454,6 @@ spec:
           secret:
             secretName: l8tunnel-cluster
             defaultMode: 256
-  volumeClaimTemplates:
-    - metadata:
-        name: hdata
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        storageClassName: standard
-        resources:
-          requests:
-            storage: 1Gi
 
 ---
 
@@ -568,9 +501,7 @@ spec:
     - from:
         - podSelector: {}
         - ipBlock:
-            cidr: 10.244.0.0/16
-        - ipBlock:
-            cidr: 172.16.0.0/12
+            cidr: 10.0.0.0/8
       ports:
         - port: 8443
           protocol: TCP
@@ -585,75 +516,17 @@ spec:
 
 ---
 
-# KIND tests: relay 0 straight from the host.
-apiVersion: v1
-kind: Service
-metadata:
-  namespace: l8tunnel
-  name: l8tunnel-relay-0
-  labels:
-    app: l8tunnel-relay
-spec:
-  type: NodePort
-  selector:
-    statefulset.kubernetes.io/pod-name: l8tunnel-relay-0
-  ports:
-    - name: tls
-      port: 8443
-      targetPort: 8443
-      nodePort: 30443
-    - name: stream
-      port: 8444
-      targetPort: 8444
-      nodePort: 30444
-    - name: gateway
-      port: 2222
-      targetPort: 2222
-      nodePort: 30222
-
----
-
-# KIND tests: relay 1 straight from the host.
-apiVersion: v1
-kind: Service
-metadata:
-  namespace: l8tunnel
-  name: l8tunnel-relay-1
-  labels:
-    app: l8tunnel-relay
-spec:
-  type: NodePort
-  selector:
-    statefulset.kubernetes.io/pod-name: l8tunnel-relay-1
-  ports:
-    - name: tls
-      port: 8443
-      targetPort: 8443
-      nodePort: 31443
-    - name: stream
-      port: 8444
-      targetPort: 8444
-      nodePort: 31444
-    - name: gateway
-      port: 2222
-      targetPort: 2222
-      nodePort: 31222
-
----
-
 # The edge: the reverse proxy and load balancer the router forwards to. It
 # uses the host network (it binds the public ports) on the node the router
 # points at.
 apiVersion: apps/v1
-kind: StatefulSet
+kind: DaemonSet
 metadata:
   namespace: l8tunnel
   name: l8tunnel-edge
   labels:
     app: l8tunnel-edge
 spec:
-  serviceName: l8tunnel-edge
-  replicas: 1
   selector:
     matchLabels:
       app: l8tunnel-edge
@@ -663,13 +536,8 @@ spec:
         app: l8tunnel-edge
     spec:
       hostNetwork: true
-      affinity:
-        podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchLabels:
-                  app: l8tunnel-edge
-              topologyKey: kubernetes.io/hostname
+      nodeSelector:
+        l8tunnel.io/edge: "true"
       containers:
         - name: l8tunnel-edge
           image: "saichler/l8tunnel-edge:latest"
@@ -706,6 +574,9 @@ spec:
               mountPath: /etc/l8tunnel/cluster-secret
               readOnly: true
       volumes:
+        - name: hdata
+          persistentVolumeClaim:
+            claimName: l8tunnel-data
         - name: logs
           hostPath:
             path: /var/log/l8tunnel
@@ -717,13 +588,3 @@ spec:
           secret:
             secretName: l8tunnel-cluster
             defaultMode: 256
-  volumeClaimTemplates:
-    - metadata:
-        name: hdata
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        storageClassName: standard
-        resources:
-          requests:
-            storage: 1Gi

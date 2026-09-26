@@ -11,13 +11,6 @@ if [ ! -f "$FILE" ]; then
   exit 1
 fi
 
-# Per-node workloads are DaemonSets in local/gke mode and StatefulSets in
-# baremetal/kind mode (K8sRules).
-WORKLOAD_KIND="daemonset"
-if [ "$MODE" = "baremetal" ] || [ "$MODE" = "kind" ]; then
-  WORKLOAD_KIND="statefulset"
-fi
-
 # Pin the KIND context instead of inheriting the ambient one (kind create
 # cluster rewrites the current context). The other modes deploy to the
 # caller's context on purpose.
@@ -26,23 +19,33 @@ if [ "$MODE" = "kind" ]; then
   KUBECTL=(kubectl --context "kind-l8tunnel")
 fi
 
+# The edge and the web UI run only on the node labeled
+# l8tunnel.io/edge=true, except in single-node KIND.
+if [ "$MODE" != "kind" ] && [ -z "$("${KUBECTL[@]}" get nodes -l l8tunnel.io/edge=true -o name)" ]; then
+  echo "No node is labeled l8tunnel.io/edge=true; run k8s/label-edge.sh <node> first."
+  exit 1
+fi
+
 echo "Applying l8tunnel (${MODE})..."
 "${KUBECTL[@]}" apply -f "$FILE"
 
-# Dependency order: vnet -> logs -> backend -> web -> registry -> relays, edge.
-echo "Waiting for l8tunnel-vnet..."
-"${KUBECTL[@]}" -n l8tunnel rollout status "${WORKLOAD_KIND}/l8tunnel-vnet" --timeout=180s
-echo "Waiting for the logs network and agent..."
-"${KUBECTL[@]}" -n l8tunnel rollout status "${WORKLOAD_KIND}/l8tunnel-log-vnet" --timeout=180s
-"${KUBECTL[@]}" -n l8tunnel rollout status "${WORKLOAD_KIND}/l8tunnel-log-agent" --timeout=180s
-echo "Waiting for l8tunnel (backend)..."
-"${KUBECTL[@]}" -n l8tunnel rollout status statefulset/l8tunnel --timeout=300s
-echo "Waiting for l8tunnel-web..."
-"${KUBECTL[@]}" -n l8tunnel rollout status "${WORKLOAD_KIND}/l8tunnel-web" --timeout=180s
-echo "Waiting for l8tunnel-registry..."
-"${KUBECTL[@]}" -n l8tunnel rollout status statefulset/l8tunnel-registry --timeout=180s
-echo "Waiting for l8tunnel-edge..."
-"${KUBECTL[@]}" -n l8tunnel rollout status statefulset/l8tunnel-edge --timeout=180s
+# wait_for waits for an app's workload, whatever its kind in this mode
+# (DaemonSet, StatefulSet or Deployment).
+wait_for() {
+  local workload
+  workload=$("${KUBECTL[@]}" -n l8tunnel get daemonset,statefulset,deployment -l "app=$1" -o name | head -1)
+  echo "Waiting for $1 (${workload})..."
+  "${KUBECTL[@]}" -n l8tunnel rollout status "$workload" --timeout="${2:-180s}"
+}
+
+# Dependency order: vnet -> logs -> backend -> web -> registry -> edge.
+wait_for l8tunnel-vnet
+wait_for l8tunnel-log-vnet
+wait_for l8tunnel-log-agent
+wait_for l8tunnel 300s
+wait_for l8tunnel-web
+wait_for l8tunnel-registry
+wait_for l8tunnel-edge
 # Relays become ready once a tunnel certificate exists (uploaded in the UI,
 # or the first-start l8tunnel-tls Secret), so they aren't waited for here.
 

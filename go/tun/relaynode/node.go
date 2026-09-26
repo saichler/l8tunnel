@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -24,8 +25,15 @@ import (
 const (
 	heartbeatInterval = 5 * time.Second
 	resyncInterval    = time.Minute
-	snapshotFile      = "/data/l8tunnel/accounts.json"
+	snapshotDir       = "/data/l8tunnel"
 )
+
+// snapshotFile is this relay's accounts snapshot. It's named per pod:
+// relays that share /data (local mode's hostPath) must not overwrite
+// each other's file.
+func snapshotFile(id string) string {
+	return filepath.Join(snapshotDir, "accounts-"+id+".json")
+}
 
 // Node is a relay running in the cluster.
 type Node struct {
@@ -64,7 +72,7 @@ func Run(ctx context.Context, vnic ifs.IVNic, version string, logger *slog.Logge
 	}
 	ops := &opsHandler{}
 	go admin.Serve(ctx, opsLn, ops, logger)
-	n.accounts = newAccounts(vnic, snapshotFile)
+	n.accounts = newAccounts(vnic, snapshotFile(n.relayID))
 	if err := n.loadAccounts(ctx, logger); err != nil {
 		return err
 	}
