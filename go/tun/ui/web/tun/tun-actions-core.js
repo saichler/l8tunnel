@@ -3,7 +3,8 @@
 // revocation and links to related records. Each action is a spec the
 // shell renders as a button: { label, danger, confirm, run } where run
 // performs it and returns the success message, or { label, open } that
-// opens a related record, or { label, invoke } that the shell handles.
+// opens a related record, or { label, invoke } that the shell handles
+// (issueCert, connect).
 (function() {
     'use strict';
 
@@ -34,6 +35,7 @@
         },
         TunLiveTunnel: (d) => {
             const b = [];
+            if (TunConnect.supports(d)) b.push({ label: 'Connect', invoke: 'connect', record: d });
             if (Number(d.state) === 1) {
                 b.push(command('Disconnect', 'Disconnect tunnel ' + d.name + '?', { kind: CTL.DISCONNECT_TUNNEL, tunnelId: d.tunnelId }));
             }

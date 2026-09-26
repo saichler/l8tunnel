@@ -26,7 +26,16 @@
     function onAction(spec) {
         if (spec.open) return openRecord(spec.open.service, spec.open.id);
         if (spec.invoke === 'issueCert') return TunIssue.openIssueCert(spec.record);
+        if (spec.invoke === 'connect') return showConnect(spec.record);
         return async () => {};
+    }
+
+    // showConnect shows the commands that reach an SSH or TCP tunnel.
+    function showConnect(tunnel) {
+        Layer8DPopup.show({
+            title: TunConnect.title(tunnel), content: TunConnect.html(tunnel), size: 'medium', showFooter: false,
+            onShow: (body) => TunConnect.wire(body, tunnel, () => Layer8DNotification.success('Copied'))
+        });
     }
 
     // actionBar adds the action buttons at the top of the topmost popup.

@@ -49,6 +49,7 @@
             const spec = specs[Number(btn.dataset.tunAction)];
             if (spec.open) return openRecord(spec.open.service, spec.open.id);
             if (spec.invoke === 'issueCert') return issueCert(spec.record);
+            if (spec.invoke === 'connect') return showConnect(spec.record);
             if (spec.confirm && !(await Layer8MConfirm.show({ title: spec.label, message: spec.confirm,
                 confirmText: spec.label, destructive: !!spec.danger }))) return;
             try {
@@ -59,6 +60,14 @@
                 Layer8MUtils.showError(spec.label + ' failed: ' + e.message);
             }
         }));
+    }
+
+    // showConnect shows the commands that reach an SSH or TCP tunnel.
+    function showConnect(tunnel) {
+        Layer8MPopup.show({
+            title: TunConnect.title(tunnel), content: TunConnect.html(tunnel), size: 'large', showFooter: false,
+            onShow: (p) => TunConnect.wire(p.body, tunnel, () => Layer8MUtils.showSuccess('Copied'))
+        });
     }
 
     // agentTunnels lists an agent's live tunnels under its details.

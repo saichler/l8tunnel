@@ -3,7 +3,7 @@
 import { test, expect, assertNoPageErrors } from '../../fixtures/test';
 import { quietly } from '../../fixtures/api';
 import { RunningAgent } from '../../fixtures/agent';
-import { uniqueName } from '../../fixtures/env';
+import { ENV, uniqueName } from '../../fixtures/env';
 import { MobileNav } from '../../pages/MobileNav';
 
 test('an agent shows online with its tunnel, then parks when it stops', async ({ mobile, api, capture }) => {
@@ -11,7 +11,7 @@ test('an agent shows online with its tunnel, then parks when it stops', async ({
     const tokName = uniqueName('e2e-mrt');
     const tunnel = uniqueName('e2e-mbox');
     const tok = await api.issueToken(tokName);
-    const agent = await RunningAgent.start(tok.token, tunnel);
+    const agent = await RunningAgent.start(tok.token, tunnel, 'ssh');
     try {
         const nav = new MobileNav(mobile);
         await nav.service('tunnels', 'tunnels', 'agents');
@@ -23,7 +23,16 @@ test('an agent shows online with its tunnel, then parks when it stops', async ({
         await nav.card(tokName).click();
         await nav.waitForPopup();
         await expect(nav.popup().locator('.tun-related')).toContainText(tunnel);
-        await mobile.evaluate(() => (window as any).Layer8MPopup.close());
+
+        // The tunnel (opened from the agent) offers its SSH commands.
+        await nav.popup().locator('.tun-related [data-tunnel]', { hasText: tunnel }).click();
+        await nav.waitForPopup(/Details/);
+        await nav.popup().locator('.tun-action-bar button', { hasText: 'Connect' }).click();
+        await nav.waitForPopup(`Connect to ${tunnel}`);
+        await nav.popup().locator('.tun-connect-user').fill('bob');
+        await expect(nav.popup().locator('.tun-secret-value').last())
+            .toHaveValue(`ssh -o ProxyCommand="l8tunnel connect %h" bob@${tunnel}.${ENV.tunnelBase}`);
+        for (let i = 0; i < 3; i++) await mobile.evaluate(() => (window as any).Layer8MPopup.close());
 
         await agent.stop();
         await expect.poll(async () => {
