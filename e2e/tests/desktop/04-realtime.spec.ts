@@ -31,7 +31,7 @@ test('a connecting and stopping agent updates the live tables in place', async (
         await live.rowWith(tunnel).locator('td').nth(1).click();
         const detail = new Popup(app);
         await detail.waitForOpen();
-        await detail.actions().filter({ hasText: 'Connect' }).click();
+        await detail.actions().filter({ hasText: /^Connect$/ }).click();
         const connect = new Popup(app);
         await connect.waitForOpen(`Connect to ${tunnel}`);
         await connect.root().locator('.tun-connect-user').fill('alice');

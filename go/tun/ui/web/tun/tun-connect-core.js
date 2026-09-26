@@ -69,15 +69,20 @@
         },
 
         // wire refreshes the commands as the user name changes and connects
-        // the copy buttons.
+        // the copy buttons. The shells call it shortly after the popup
+        // shows, so a name typed before that is applied at once.
         wire: function(body, t, onCopied) {
             const input = body.querySelector('.tun-connect-user');
             const areas = body.querySelectorAll('[data-connect]');
-            if (input) input.addEventListener('input', () => {
+            const refresh = () => {
                 const user = input.value.trim();
                 saveUser(user);
                 commands(t, user).forEach((c, i) => { if (areas[i]) areas[i].value = c.cmd; });
-            });
+            };
+            if (input) {
+                input.addEventListener('input', refresh);
+                refresh();
+            }
             body.querySelectorAll('.tun-connect .tun-secret').forEach(b => {
                 b.querySelector('[data-copy]').addEventListener('click', async () => {
                     await navigator.clipboard.writeText(b.querySelector('.tun-secret-value').value);

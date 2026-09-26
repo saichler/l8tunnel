@@ -27,7 +27,7 @@ test('an agent shows online with its tunnel, then parks when it stops', async ({
         // The tunnel (opened from the agent) offers its SSH commands.
         await nav.popup().locator('.tun-related [data-tunnel]', { hasText: tunnel }).click();
         await nav.waitForPopup(/Details/);
-        await nav.popup().locator('.tun-action-bar button', { hasText: 'Connect' }).click();
+        await nav.popup().locator('.tun-action-bar button', { hasText: /^Connect$/ }).click();
         await nav.waitForPopup(`Connect to ${tunnel}`);
         await nav.popup().locator('.tun-connect-user').fill('bob');
         await expect(nav.popup().locator('.tun-secret-value').last())
