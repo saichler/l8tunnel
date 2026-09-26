@@ -198,7 +198,31 @@ they connect straight to it (still verifying its certificate) instead of
 through the router's loopback. Its `install.sh` asks for the agent token, what to expose (SSH, a web app,
 or both) and a name, installs the agent as a systemd service, and prints
 how to connect. Unattended: `L8TUNNEL_TOKEN=... EXPOSE=both WEB_PORT=3000
-./install.sh`.
+./install.sh`. `EXPOSE` is `ssh`, `web`, `both`, or `ssh+https`: SSH as
+`<name>-ssh`, and `https://<name>.<domain>` passed through untouched to the
+machine's own HTTPS server on 443 (`HTTPS_PORT` for another port).
+
+### No-questions package
+
+For machines set up by people who shouldn't have to answer anything, build
+a package with its token inside:
+
+```bash
+ENROLL_TOKEN_FILE=enroll.token ./packaging/build-agent.sh amd64 layer8-tunnel.info
+# -> dist/l8tunnel-agent-layer8-tunnel.info-enroll-<version>-linux-amd64.tar.gz
+```
+
+On the machine: `tar xzf` it, `cd` into it and run `./install.sh`. It
+installs the agent as a systemd service, connects to `connect.<domain>:443`
+and registers the machine under its host name with `ssh+https`
+(`ENROLL_EXPOSE=ssh` at build time for SSH only), then prints how to reach
+it. There are no fallbacks: when the agent can't connect or the host name
+is taken, it stops, shows the agent's log (which says why) and exits 1;
+rerun with `NAME=<other> ./install.sh` for another name.
+
+Anyone holding the package can register machines, so give it a token of
+its own (Access ▸ Tokens, limited to the SSH and TLS types) and revoke
+that token to retire the package. The token file stays out of git.
 
 ## Docker
 
@@ -222,20 +246,48 @@ connect exactly as they do to a standalone relay.
 ```bash
 ../l8secure/build-images.sh l8tunnel amd64   # base images (security plugin, Postgres)
 go/build-all-images.sh amd64                 # the l8tunnel images
+# bare metal needs a storage provisioner once:
+kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
 k8s/secrets.sh <context>                     # cluster keys and the agent CA (never committed)
-k8s/label-edge.sh <node> <context>           # the node the router forwards 443/80/2222/22000+ to
+k8s/label-edge.sh <node> <context>           # the node the router forwards the public ports to
 k8s/deploy.sh baremetal                      # or local, gke; kind for development
 ```
 
-Then open `https://<edge node>:5443` (the UI), upload the tunnel
-certificate on the tunnel base row in Edge ▸ Domains, and issue tokens in
-Access ▸ Tokens.
+Then open `https://<edge node>:5443` (the UI) from your LAN, upload the
+tunnel certificate (a wildcard for `*.<domain>` and `<domain>`) on the
+tunnel base row in Edge ▸ Domains, and issue tokens in Access ▸ Tokens. The
+relays become ready once that certificate is uploaded. Change the default
+admin password in System ▸ Security.
+
+**Ports on the edge node** (router forwards and host firewall):
+
+| Port | For | Open to |
+|---|---|---|
+| 443 | agents, HTTPS tunnels, SSH over 443 | the internet |
+| 22000-22999 | SSH/TCP tunnels by port (mode A) | the internet |
+| 2222 | the SSH gateway | the internet (optional) |
+| 80 | redirect to HTTPS | the internet (optional) |
+| 5443 | the management UI | your LAN only: never forward it |
+
+To reach the UI from outside, forward it over one of your own SSH tunnels:
+`ssh -p <port> -L 5443:<edge node LAN IP>:5443 <user>@<domain>`, then open
+https://localhost:5443.
+
+**Reaching a machine:** Tunnels ▸ Live, open an SSH tunnel and press
+**Connect**: it shows the exact commands for that tunnel (by port, and over
+443 by name) with a copy button each.
+
+**Updating an image:** the manifests use `imagePullPolicy: IfNotPresent`,
+so pull the new image on the node (`crictl pull docker.io/saichler/<image>:latest`)
+before deleting the pod.
 
 - **Development:** `k8s/kind-start.sh` creates a KIND cluster, loads the
   images, creates the Secrets and deploys; `go run ./tests/mocks/cmd
   -insecure` (from `go/`) fills it with mock data;
   `L8TUNNEL_KIND_URL=https://localhost:5443 go test ./tests/...` runs the
-  cluster tests.
+  cluster tests, and `cd e2e && npm install && npm test` runs the
+  Playwright suite (desktop and mobile) against the KIND deployment
+  ([e2e/README.md](e2e/README.md)).
 - **Moving a standalone relay's tokens over:** `l8tunnel-server export --out
   export/` on the relay, `k8s/secrets.sh <context> export/` (the agent CA),
   and `go run ./tun/tools/import -address https://<web>:5443 export/export.json`.
