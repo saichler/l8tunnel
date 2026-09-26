@@ -1736,6 +1736,15 @@ Docker or kubectl. It only runs the systemd relay and sshd.
   security config: the hash of a 32-byte random secret gives nothing away,
   and the UI never shows it. The framework behavior is noted for its owner
   (ReportInfraBugs); `TestKindTokenSurvivesUIRead` guards it.
+  - The vnet keeps roles in its own store and loads them over the config's,
+    so a rebuilt security plugin doesn't change an existing deployment's
+    roles. KIND's roles were updated through the Roles API (area 74); a new
+    deployment starts without the rule.
+- **A claim didn't see a new reservation.** The registry reloaded
+  reservations and site names every 30 s, so a claim right after a
+  reservation or an import got a random port, and another token could take
+  the name meanwhile. A claim now reloads them first (the cache answers,
+  and live reloads pause for 30 s, while the backend is down).
 - **New coverage:** per-request balancing and connection reuse, WebSocket
   and upstream certificate verification through the edge, weights within
   5% over 1,000 connections, agent token vs management bearer, relay pod

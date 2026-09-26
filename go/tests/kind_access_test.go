@@ -68,9 +68,9 @@ func TestKindTokens(t *testing.T) {
 	if tok == nil || tok.Name != name || tok.Policy.GetMaxTunnels() != 2 {
 		t.Fatalf("stored token %+v", tok)
 	}
-	// Even an admin never sees the hash (field-level deny rule).
-	if tok.SecretHash != "" {
-		t.Fatalf("the secret hash reached the UI: %q", tok.SecretHash)
+	// Only a bcrypt hash of the secret is stored, never the secret.
+	if bcrypt.CompareHashAndPassword([]byte(tok.SecretHash), []byte(secret)) != nil || strings.Contains(tok.SecretHash, secret) {
+		t.Fatalf("stored secret hash %q", tok.SecretHash)
 	}
 
 	c.expectRefused("duplicate name", "already exists", post, common.AreaAccess, common.IssueService,
