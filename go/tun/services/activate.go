@@ -34,7 +34,9 @@ func ActivateBackend(creds, dbname string, vnic ifs.IVNic) {
 
 // StartMaintenance keeps the TUNNEL_BASE domain present and in line with
 // cluster.yaml: now, and every minute (a plain ORM DELETE can't be refused).
+// It also starts the alert evaluator.
 func StartMaintenance(vnic ifs.IVNic) {
+	alerts.StartEvaluator(vnic)
 	go func() {
 		for {
 			if err := domains.EnsureTunnelBase(vnic); err != nil {

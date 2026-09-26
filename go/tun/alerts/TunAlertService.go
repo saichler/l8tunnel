@@ -1,6 +1,6 @@
 // Package alerts is the TunAlert service: alert rules whose targets are
-// notified (through l8notify) when a condition holds. The evaluator that
-// fires them comes in phase K4.
+// notified (through l8notify) when a condition holds, judged by the
+// backend's evaluator.
 package alerts
 
 import (
