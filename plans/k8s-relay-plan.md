@@ -1754,3 +1754,30 @@ Docker or kubectl. It only runs the systemd relay and sshd.
   restart, and an agent connecting with an imported token.
 - **Not tested:** operator and viewer behavior. Every user is admin in this
   deployment.
+
+### 16.16 K8 browser suite (2026-09-26)
+
+- **`e2e/`** (Playwright, desktop and mobile on a Pixel 7 profile) runs
+  against the KIND deployment: 27 specs, about a minute. Global setup builds
+  the agent binary and installs a throwaway tunnel certificate, so the
+  realtime specs connect a real agent to relay-0. Every spec cleans up and
+  asserts on the rows it created.
+- **Covered:** every section and service loads with no uncaught exception,
+  console error or failed request; rows open their records; login through
+  the form, a refused password and the root redirect; a token issued
+  (shown once), opened and revoked on both shells; a reservation through
+  the reference picker; a site's TCP port forward bound by the edge (Router
+  ports) and removed; an alert rule with a webhook target created and
+  deleted; a real agent's tunnel and agent rows appearing in place, listing
+  the tunnel in its details, and going to grace when it stops.
+- **Bugs found and fixed:**
+  - the agent details' Tunnels table on desktop never fetched (created
+    without `serverSide`), so it always said "No tunnels"; mobile was
+    fine;
+  - the mobile home showed a "Coming Soon" Dashboard card with nothing
+    behind it; the home screen is the dashboard.
+- **Open (a product decision):** a new edge domain's **Enabled** box starts
+  unchecked, so a site made in the UI does nothing until it's ticked (its
+  port forwards default to enabled). The spec ticks it, as a user must.
+- **Still to do in K8:** the production cutover (§7.5) and
+  `plans/k8s-verification.md`. Both wait on where the cluster runs (§16.8).
