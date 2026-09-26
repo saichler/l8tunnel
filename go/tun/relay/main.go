@@ -38,7 +38,7 @@ func main() {
 	nic.Start()
 	nic.WaitForConnection()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := relaynode.Run(ctx, nic, version, logger); err != nil {
 		fmt.Fprintln(os.Stderr, "l8tunnel relay:", err)
 		os.Exit(1)

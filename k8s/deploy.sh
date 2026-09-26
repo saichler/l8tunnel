@@ -29,9 +29,12 @@ fi
 echo "Applying l8tunnel (${MODE})..."
 "${KUBECTL[@]}" apply -f "$FILE"
 
-# Dependency order: vnet -> backend -> web -> registry -> relays, edge.
+# Dependency order: vnet -> logs -> backend -> web -> registry -> relays, edge.
 echo "Waiting for l8tunnel-vnet..."
 "${KUBECTL[@]}" -n l8tunnel rollout status "${WORKLOAD_KIND}/l8tunnel-vnet" --timeout=180s
+echo "Waiting for the logs network and agent..."
+"${KUBECTL[@]}" -n l8tunnel rollout status "${WORKLOAD_KIND}/l8tunnel-log-vnet" --timeout=180s
+"${KUBECTL[@]}" -n l8tunnel rollout status "${WORKLOAD_KIND}/l8tunnel-log-agent" --timeout=180s
 echo "Waiting for l8tunnel (backend)..."
 "${KUBECTL[@]}" -n l8tunnel rollout status statefulset/l8tunnel --timeout=300s
 echo "Waiting for l8tunnel-web..."

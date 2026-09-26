@@ -6,8 +6,10 @@
 # between the pod network and the host network (the same fix l8alarms and
 # secscan use).
 #
-# Deployed: vnet, backend, web, registry, two relays and the edge; the log
-# services join in K6. The relays run on the pod network
+# Deployed: vnet, the logs network and its agent, backend, web, registry,
+# two relays and the edge. Every process writes its logs under
+# /data/logs/l8tunnel (the security config's log directory), a hostPath
+# shared on the node, where the log agent collects them. The relays run on the pod network
 # (two replicas on one node can't share host ports) and reach the vnet at
 # NODE_IP; the per-relay NodePort Services let the tests reach each relay
 # directly until the edge exists.
@@ -84,6 +86,133 @@ spec:
           volumeMounts:
             - name: hdata
               mountPath: /data
+            - name: logs
+              mountPath: /data/logs/l8tunnel
+      volumes:
+        - name: logs
+          hostPath:
+            path: /var/log/l8tunnel
+            type: DirectoryOrCreate
+  volumeClaimTemplates:
+    - metadata:
+        name: hdata
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 1Gi
+
+---
+
+# The logs network: the log service System > Logs reads.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: l8tunnel
+  name: l8tunnel-log-vnet
+  labels:
+    app: l8tunnel-log-vnet
+spec:
+  serviceName: l8tunnel-log-vnet
+  replicas: 1
+  selector:
+    matchLabels:
+      app: l8tunnel-log-vnet
+  template:
+    metadata:
+      labels:
+        app: l8tunnel-log-vnet
+    spec:
+      hostNetwork: true
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: l8tunnel-log-vnet
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: l8tunnel-log-vnet
+          image: saichler/l8tunnel-log-vnet:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 29010
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          volumeMounts:
+            - name: hdata
+              mountPath: /data
+            - name: logs
+              mountPath: /data/logs/l8tunnel
+      volumes:
+        - name: logs
+          hostPath:
+            path: /var/log/l8tunnel
+            type: DirectoryOrCreate
+  volumeClaimTemplates:
+    - metadata:
+        name: hdata
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 1Gi
+
+---
+
+# Collects the shared log directory on its node for the logs network.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: l8tunnel
+  name: l8tunnel-log-agent
+  labels:
+    app: l8tunnel-log-agent
+spec:
+  serviceName: l8tunnel-log-agent
+  replicas: 1
+  selector:
+    matchLabels:
+      app: l8tunnel-log-agent
+  template:
+    metadata:
+      labels:
+        app: l8tunnel-log-agent
+    spec:
+      hostNetwork: true
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: l8tunnel-log-agent
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: l8tunnel-log-agent
+          image: saichler/l8tunnel-log-agent:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: LOGPATH
+              value: /data/logs/l8tunnel
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          volumeMounts:
+            - name: hdata
+              mountPath: /data
+            - name: logs
+              mountPath: /data/logs/l8tunnel
+      volumes:
+        - name: logs
+          hostPath:
+            path: /var/log/l8tunnel
+            type: DirectoryOrCreate
   volumeClaimTemplates:
     - metadata:
         name: hdata
@@ -133,6 +262,8 @@ spec:
           volumeMounts:
             - name: hdata
               mountPath: /data
+            - name: logs
+              mountPath: /data/logs/l8tunnel
             - name: cluster
               mountPath: /etc/l8tunnel/cluster
               readOnly: true
@@ -140,6 +271,10 @@ spec:
               mountPath: /etc/l8tunnel/agent-ca
               readOnly: true
       volumes:
+        - name: logs
+          hostPath:
+            path: /var/log/l8tunnel
+            type: DirectoryOrCreate
         - name: cluster
           configMap:
             name: l8tunnel-cluster
@@ -200,6 +335,13 @@ spec:
           volumeMounts:
             - name: hdata
               mountPath: /data
+            - name: logs
+              mountPath: /data/logs/l8tunnel
+      volumes:
+        - name: logs
+          hostPath:
+            path: /var/log/l8tunnel
+            type: DirectoryOrCreate
   volumeClaimTemplates:
     - metadata:
         name: hdata
@@ -248,10 +390,16 @@ spec:
           volumeMounts:
             - name: hdata
               mountPath: /data
+            - name: logs
+              mountPath: /data/logs/l8tunnel
             - name: cluster
               mountPath: /etc/l8tunnel/cluster
               readOnly: true
       volumes:
+        - name: logs
+          hostPath:
+            path: /var/log/l8tunnel
+            type: DirectoryOrCreate
         - name: cluster
           configMap:
             name: l8tunnel-cluster
@@ -322,6 +470,8 @@ spec:
           volumeMounts:
             - name: hdata
               mountPath: /data
+            - name: logs
+              mountPath: /data/logs/l8tunnel
             - name: cluster
               mountPath: /etc/l8tunnel/cluster
               readOnly: true
@@ -332,6 +482,10 @@ spec:
               mountPath: /etc/l8tunnel/cluster-secret
               readOnly: true
       volumes:
+        - name: logs
+          hostPath:
+            path: /var/log/l8tunnel
+            type: DirectoryOrCreate
         - name: cluster
           configMap:
             name: l8tunnel-cluster
@@ -443,6 +597,8 @@ spec:
           volumeMounts:
             - name: hdata
               mountPath: /data
+            - name: logs
+              mountPath: /data/logs/l8tunnel
             - name: cluster
               mountPath: /etc/l8tunnel/cluster
               readOnly: true
@@ -450,6 +606,10 @@ spec:
               mountPath: /etc/l8tunnel/cluster-secret
               readOnly: true
       volumes:
+        - name: logs
+          hostPath:
+            path: /var/log/l8tunnel
+            type: DirectoryOrCreate
         - name: cluster
           configMap:
             name: l8tunnel-cluster
