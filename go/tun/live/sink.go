@@ -16,6 +16,12 @@ type sink struct {
 
 func (s *sink) TunnelChanged(r *tun.TunLiveTunnel, change claims.Change) {
 	s.views.tunnels.apply(r, &tun.TunLiveTunnel{Name: r.Name}, change)
+	if change != claims.Updated {
+		// Edges and relays route by this table: tell them it changed, so
+		// they don't route on a stale copy (counter updates don't matter).
+		go common.PushToEdges(r, ifs.POST, s.vnic)
+		go common.PushToRelays(r, ifs.POST, s.vnic)
+	}
 }
 
 func (s *sink) AgentChanged(r *tun.TunAgent, change claims.Change) {

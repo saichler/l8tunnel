@@ -29,7 +29,10 @@ type Change int
 
 const (
 	Created Change = iota + 1
+	// Updated changes counters or other details.
 	Updated
+	// Moved changes where traffic goes: the tunnel's relay or state.
+	Moved
 	Deleted
 )
 
@@ -168,6 +171,9 @@ func (e *Engine) setTunnel(rec *tun.TunLiveTunnel) {
 	if old := e.tunnels[rec.Name]; old != nil {
 		e.unindex(old)
 		change = Updated
+		if old.RelayId != rec.RelayId || old.State != rec.State || old.PublicPort != rec.PublicPort {
+			change = Moved
+		}
 	}
 	e.tunnels[rec.Name] = rec
 	if rec.PublicPort != 0 {

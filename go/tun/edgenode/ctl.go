@@ -30,8 +30,11 @@ func (h *CtlHandler) Delete(e ifs.IElements, _ ifs.IVNic) ifs.IElements { return
 func (h *CtlHandler) apply(elems ifs.IElements) ifs.IElements {
 	node := h.Arg(0).(*Node)
 	for _, e := range elems.Elements() {
-		if _, ok := e.(*tun.EdgeDomain); ok {
+		switch e.(type) {
+		case *tun.EdgeDomain:
 			node.reloadSoon()
+		case *tun.TunLiveTunnel:
+			node.live.Invalidate() // a tunnel appeared, moved or went away
 		}
 	}
 	return nil

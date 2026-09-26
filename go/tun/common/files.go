@@ -48,3 +48,12 @@ func DeleteEntity(serviceName string, serviceArea byte, filter interface{}, vnic
 	}
 	return vnic.Request("", serviceName, serviceArea, ifs.DELETE, filter, RequestTimeout).Error()
 }
+
+// PatchEntity patches the object (by primary key), through the local
+// handler when this process owns the service.
+func PatchEntity(serviceName string, serviceArea byte, entity interface{}, vnic ifs.IVNic) error {
+	if h, ok := vnic.Resources().Services().ServiceHandler(serviceName, serviceArea); ok {
+		return h.Patch(object.New(nil, entity), vnic).Error()
+	}
+	return vnic.Request("", serviceName, serviceArea, ifs.PATCH, entity, RequestTimeout).Error()
+}

@@ -40,6 +40,10 @@ func edgeNode(t *testing.T, c *kindClient) *tun.EdgeNode {
 func TestKindEdgeProxy(t *testing.T) {
 	c := newKindClient(t, "admin", "admin")
 	ca := installTunnelCert(t, c)
+	// Sites a failed earlier run left behind would hold the test ports.
+	if err := c.remove(common.AreaEdge, common.DomainService, "EdgeDomain", "domain=*.kind.site"); err != nil {
+		t.Logf("removing leftover sites: %v", err)
+	}
 	tok := issueToken(t, c, uniqueName("k3"), &tun.TunTokenPolicy{Ports: "22000-22009"})
 	t.Cleanup(func() { revokeToken(c, tok.TokenId) })
 
@@ -74,7 +78,7 @@ func TestKindEdgeProxy(t *testing.T) {
 		}
 		got, err := roundTrip(localAddr(int(port)), []byte("mode A"))
 		if err != nil || string(got) != "mode A" {
-			t.Fatalf("mode A through the edge: %q %v", got, err)
+			t.Fatalf("mode A through the edge on port %d: %q %v (live record %+v)", port, got, err, liveTunnel(t, c, boxName))
 		}
 	})
 

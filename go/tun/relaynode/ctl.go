@@ -55,6 +55,8 @@ func (n *Node) handle(action ifs.Action, e interface{}) {
 		n.refreshSoon()
 	case *tun.TunAgentCert, *tun.TunGatewayKey:
 		n.refreshSoon()
+	case *tun.TunLiveTunnel:
+		n.link.invalidate() // a tunnel appeared, moved or went away
 	case *tun.EdgeDomain:
 		if v.Kind == tun.EdgeDomainKind_EDGE_DOMAIN_KIND_TUNNEL_BASE {
 			go n.reloadCert()

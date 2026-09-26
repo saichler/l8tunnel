@@ -38,6 +38,7 @@ type Node struct {
 	edge      *edge.Edge
 	certs     *certs.Set
 	certFP    map[string]string // domain ID -> certificate fingerprint loaded
+	live      *common.LiveView
 	startedAt time.Time
 	log       *slog.Logger
 
@@ -57,8 +58,9 @@ func Run(ctx context.Context, vnic ifs.IVNic, version string, logger *slog.Logge
 	if err != nil {
 		return err
 	}
+	n.live = common.NewLiveView(vnic, liveTTL)
 	if n.edge, err = edge.New(edge.Config{BaseDomain: c.BaseDomain, ControlSNI: c.ControlSNI, NodeIP: n.nodeIP,
-		ForwardKey: key, Live: &live{view: common.NewLiveView(vnic, liveTTL)}, Certs: n.certs, Logger: logger}); err != nil {
+		ForwardKey: key, Live: &live{view: n.live}, Certs: n.certs, Logger: logger}); err != nil {
 		return err
 	}
 	// The tunnel base's ports first, so tunnels work before (or without)
@@ -176,10 +178,10 @@ func (n *Node) report() {
 	rec := &tun.EdgeNode{EdgeId: n.id, NodeIp: n.nodeIP, Version: n.version, ConfigVersion: st.Version,
 		Listeners: st.Listeners, Backends: st.Backends, TotalConns: st.Accepted, StartedAt: n.startedAt.Unix(),
 		LastSeen: time.Now().Unix()}
-	// POST creates the record once; later reports replace it with PUT. A
-	// PUT that fails (the backend restarted and lost it) creates it again.
+	// POST creates the record once; later reports update it with PATCH. A
+	// PATCH that fails (the backend restarted and lost it) creates it again.
 	if n.reported.Load() {
-		if err := l8common.PutEntity(common.EdgeNodeService, common.AreaEdge, rec, n.vnic); err == nil {
+		if err := common.PatchEntity(common.EdgeNodeService, common.AreaEdge, rec, n.vnic); err == nil {
 			return
 		}
 	}

@@ -25,6 +25,7 @@ import (
 type accounts struct {
 	mu       sync.RWMutex
 	downAt   time.Time                    // last failed live lookup
+	keysAt   time.Time                    // last live gateway-key lookup
 	tokens   map[string]*auth.TokenRecord // by token ID
 	keys     map[string]*auth.GatewayKey  // by fingerprint
 	snapshot string
@@ -95,10 +96,31 @@ func copyRecord(rec *auth.TokenRecord) *auth.TokenRecord {
 	return &cp
 }
 
-// GatewayKeyByFingerprint implements relay.GatewayKeyStore.
+// GatewayKeyByFingerprint implements relay.GatewayKeyStore. An unknown key
+// is looked up live (at most once a second), so a key added a moment ago
+// works at once.
 func (a *accounts) GatewayKeyByFingerprint(fp string) (*auth.GatewayKey, error) {
 	a.mu.RLock()
-	defer a.mu.RUnlock()
+	k := a.keys[fp]
+	recent := time.Since(a.keysAt) < time.Second || time.Since(a.downAt) < liveLookupBackoff
+	a.mu.RUnlock()
+	if k != nil || recent {
+		return k, nil
+	}
+	keys, err := gwkeys.Keys(a.vnic)
+	if err != nil {
+		a.mu.Lock()
+		a.downAt = time.Now()
+		a.mu.Unlock()
+		return nil, nil
+	}
+	byFP := map[string]*auth.GatewayKey{}
+	for _, gk := range keys {
+		byFP[gk.Fingerprint] = &auth.GatewayKey{Name: gk.Name, PublicKey: gk.PublicKey, Fingerprint: gk.Fingerprint, Tunnels: gk.Tunnels}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.keys, a.keysAt = byFP, time.Now()
 	return a.keys[fp], nil
 }
 

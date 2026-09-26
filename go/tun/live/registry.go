@@ -61,7 +61,7 @@ func (r *Registry) loop() {
 }
 
 // reconcile makes the live tables match the engine exactly: rows the
-// engine has are replaced (or created when missing), rows it doesn't have
+// engine has are patched (or created when missing), rows it doesn't have
 // are deleted.
 func (r *Registry) reconcile() {
 	tunnels, agents, relays := r.Engine.Snapshot()
