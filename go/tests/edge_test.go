@@ -97,6 +97,16 @@ func TestEdgeSourceHashAndLeastConn(t *testing.T) {
 	buf := make([]byte, 1)
 	conn.Read(buf) // the first member is the echo server, now busy
 	for i := 0; i < 5; i++ {
+		// The edge counts the previous probe's connection until it sees it
+		// close; with it still counted, A would tie with the busy member.
+		waitUntil(t, 5*time.Second, "A's earlier connection closed", func() bool {
+			for _, b := range e.Status().Backends {
+				if b.Domain == "l2/f" && b.Target == a && b.ActiveConns != 0 {
+					return false
+				}
+			}
+			return true
+		})
 		if got := whoAnswers(localAddr(lc2)); got != "A" {
 			t.Fatalf("least connections sent a new connection to the busy member (%q)", got)
 		}
