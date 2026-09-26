@@ -61,6 +61,8 @@ kind create cluster --name "${CLUSTER_NAME}" --config "${SCRIPT_DIR}/${KIND_CONF
 echo "Loading images into KIND..."
 IMAGES=(
   saichler/l8tunnel-vnet:latest
+  saichler/l8tunnel-log-vnet:latest
+  saichler/l8tunnel-log-agent:latest
   saichler/l8tunnel:latest
   saichler/l8tunnel-web:latest
   saichler/l8tunnel-registry:latest

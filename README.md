@@ -212,6 +212,38 @@ docker exec l8tunnel l8tunnel-server token create --name laptop
 docker build --target agent -t l8tunnel-agent .
 ```
 
+## Kubernetes cluster
+
+The relay also runs as a cluster on Kubernetes: several relays behind an
+edge proxy and load balancer, with a management UI (tokens, domains and
+certificates, port forwarding, live agents and tunnels, alerts). Agents
+connect exactly as they do to a standalone relay.
+
+```bash
+../l8secure/build-images.sh l8tunnel amd64   # base images (security plugin, Postgres)
+go/build-all-images.sh amd64                 # the l8tunnel images
+k8s/secrets.sh <context>                     # cluster keys and the agent CA (never committed)
+k8s/label-edge.sh <node> <context>           # the node the router forwards 443/80/2222/22000+ to
+k8s/deploy.sh baremetal                      # or local, gke; kind for development
+```
+
+Then open `https://<edge node>:5443` (the UI), upload the tunnel
+certificate on the tunnel base row in Edge ▸ Domains, and issue tokens in
+Access ▸ Tokens.
+
+- **Development:** `k8s/kind-start.sh` creates a KIND cluster, loads the
+  images, creates the Secrets and deploys; `go run ./tests/mocks/cmd
+  -insecure` (from `go/`) fills it with mock data;
+  `L8TUNNEL_KIND_URL=https://localhost:5443 go test ./tests/...` runs the
+  cluster tests.
+- **Moving a standalone relay's tokens over:** `l8tunnel-server export --out
+  export/` on the relay, `k8s/secrets.sh <context> export/` (the agent CA),
+  and `go run ./tun/tools/import -address https://<web>:5443 export/export.json`.
+  Agents keep their tokens, names and ports.
+
+The design is in [plans/k8s-relay-plan.md](plans/k8s-relay-plan.md) and
+[plans/PRD.md §15](plans/PRD.md).
+
 ## Building
 
 ```bash

@@ -311,7 +311,7 @@ Everything runs as end-to-end tests in `go/tests/`, against real relay and agent
 
 ## 13. Engineering guidelines
 
-l8tunnel follows the generic Go and engineering rules from `../l8book/layer-8-guide-lines.md`. It isn't a Layer 8 application, so the framework-specific rules don't apply (see §13.4).
+l8tunnel follows the generic Go and engineering rules from `../l8book/layer-8-guide-lines.md`. The standalone product isn't a Layer 8 application, so the framework-specific rules don't apply to it (see §13.4). Kubernetes cluster mode (§15) is a Layer 8 application and follows them, with the exceptions in §15.6.
 
 ### 13.1 Repository layout
 
@@ -320,11 +320,16 @@ l8tunnel/
 ├── plans/                         # PRDs and plans (this file)
 ├── proto/
 │   ├── l8tunnel.proto             # control-protocol messages
+│   ├── tun.proto                  # cluster mode's management model (§15)
 │   └── make-bindings.sh           # the only way to generate Go bindings
+├── k8s/                           # cluster mode: the 4 manifests and scripts (§15.4)
 └── go/
     ├── go.mod / go.sum
     ├── vendor/                    # never committed (.gitignore: go/vendor/)
     ├── types/l8tunnel/            # generated .pb.go, never hand-edited
+    ├── types/tun/                 # generated from proto/tun.proto
+    ├── tun/                       # cluster mode: Layer 8 services, mains and the UI (§15)
+    ├── build-all-images.sh        # cluster mode's images
     ├── cmd/
     │   ├── l8tunnel-server/main.go
     │   ├── l8tunnel-agent/main.go
@@ -342,7 +347,7 @@ l8tunnel/
     │   ├── config/                # YAML loading and validation
     │   ├── admin/                 # admin socket and status
     │   └── metrics/               # Prometheus and structured logging
-    └── tests/                     # all tests (end to end)
+    └── tests/                     # all tests (end to end); tests/mocks: cluster mock data
 ```
 
 The current `.gitignore` has `# vendor/` commented out. P0 must replace it with an uncommented `go/vendor/` line.
@@ -382,7 +387,7 @@ enum TunnelType {
 
 ### 13.4 Rules that don't apply
 
-These guideline rules are specific to the Layer 8 framework and are out of scope for l8tunnel: l8ui/UI and mobile rules, l8erp/probler project structure, ServiceName/ServiceArea and ServiceCallbacks, the ORM and single-owner tables, L8Query, `ISecurityProvider`/l8secure, the l8events/l8notify/log-vnet services, the 4-mode Kubernetes manifests and Layer 8 base images, `run-local.sh` with DB and mock data, and the Playwright/KIND browser E2E suite.
+For the standalone product (the relay, agent and client binaries), these guideline rules are specific to the Layer 8 framework and out of scope: l8ui/UI and mobile rules, l8erp/probler project structure, ServiceName/ServiceArea and ServiceCallbacks, the ORM and single-owner tables, L8Query, `ISecurityProvider`/l8secure, the l8events/l8notify/log-vnet services, the 4-mode Kubernetes manifests and Layer 8 base images, mock data, and the Playwright/KIND browser E2E suite. Cluster mode (§15) follows all of them, except as listed in §15.6.
 
 ## 14. Glossary
 
@@ -391,3 +396,81 @@ These guideline rules are specific to the Layer 8 framework and are out of scope
 - **Tunnel:** a mapping from a public endpoint (hostname or port) to a private target via an agent.
 - **Termination vs passthrough:** whether the relay decrypts the public TLS (termination) or forwards encrypted bytes as-is (passthrough).
 - **SNI:** Server Name Indication, the hostname sent in the clear in the TLS ClientHello. Used for routing without decrypting.
+
+## 15. Kubernetes cluster mode
+
+The same relay and agent, run as a cluster on Kubernetes with a Layer 8
+management plane and UI. The design, phases and decisions are in
+[k8s-relay-plan.md](k8s-relay-plan.md); this section summarizes what was
+built. Agents don't change: the wire protocol is the same (plan §8).
+
+### 15.1 Components
+
+| Process | Image | Role |
+|---|---|---|
+| vnet | `saichler/l8tunnel-vnet` | the switch every l8tunnel process connects through |
+| log-vnet, log-agent | `saichler/l8tunnel-log-vnet`, `-log-agent` | the logs network and its per-node collector (System ▸ Logs) |
+| backend | `saichler/l8tunnel` | the ORM services on the embedded Postgres, `TunIssue`, the alert evaluator |
+| web | `saichler/l8tunnel-web` | the REST API under `/tun/`, the desktop and mobile UI, FileStore (one instance) |
+| registry | `saichler/l8tunnel-registry` | the single owner of the live tables: a claims engine that serializes every tunnel name, port and domain |
+| relays | `saichler/l8tunnel-relay` | agent sessions and tunnel traffic; names are claimed through the registry, other relays' tunnels are forwarded to their owner |
+| edge | `saichler/l8tunnel-edge` | the reverse proxy and load balancer the router forwards to: sites (terminate or pass through, by SNI or Host), tunnels (to the owning relay), mode A ports and the SSH gateway |
+
+### 15.2 Management plane
+
+| Module (area) | Services |
+|---|---|
+| access (40) | `TunToken`, `TunResv`, `TunGwKey`, `TunAgCert` (ORM); `TunIssue` (issues tokens and agent certificates, shown once; imports; revokes) |
+| edge (41) | `EdgeDomain` (sites and the built-in tunnel base domain: certificate, port forwards, IP lists), `EdgeNode` (edge reports), `EdgeCtl` (listener in every edge) |
+| live (42) | `TunLive`, `TunAgent`, `TunRelay` (registry views), `TunClaim` and `TunCtl` (registry actions), `TunRlyCtl` (listener in every relay) |
+| alerts (43) | `TunAlert` (rules; notifications through l8notify) |
+
+Security comes from l8secure (`l8tunnel.json`: admin, operator and viewer
+roles; the token secret hash is never shown to UI users). Events and
+notifications use the required l8events and l8notify services.
+
+### 15.3 UI
+
+Desktop (`go/tun/ui/web/app.html`) and mobile (`m/app.html`) share one set
+of definitions: Dashboard, Tunnels (agents, live tunnels, relays, edge
+nodes, realtime), Access, Edge (domains with the certificate and port
+forwarding, router ports), Alerts (rules, delivery log, integrations) and
+System. Disconnect, drain, resume and revoke are actions on the records;
+new tokens and agent certificates are shown once.
+
+### 15.4 Deployment
+
+- **Manifests:** `k8s/l8tunnel-{local,baremetal,gke,kind}.yaml`, the same
+  workloads with per-mode kinds, storage and placement. The edge and the
+  web UI run on the node labeled by `k8s/label-edge.sh <node>` (not in
+  KIND).
+- **Secrets:** `k8s/secrets.sh <context> [export-dir]` creates
+  `l8tunnel-cluster` (the PROXY header key and the SSH gateway host key)
+  and `l8tunnel-agent-ca`; they're never committed.
+- **Images:** `go/build-all-images.sh [amd64|arm64]`; the base images come
+  from `../l8secure/build-images.sh l8tunnel`.
+- **Deploy:** `k8s/deploy.sh <mode>` and `k8s/undeploy.sh <mode>`;
+  `k8s/kind-start.sh` runs a local KIND cluster for development and tests.
+- **Tunnel certificate:** uploaded in Edge ▸ Domains on the tunnel base row;
+  relays and the edge switch to it without a restart.
+- **Mock data:** `go run ./tests/mocks/cmd -insecure` (KIND).
+- **Migration from a standalone relay:** `l8tunnel-server export --out DIR`,
+  `k8s/secrets.sh <context> DIR`, then
+  `go run ./tun/tools/import -address https://<web>:5443 DIR/export.json`;
+  agents reconnect with the same tokens, names and ports (plan §7.5).
+
+### 15.5 Local development
+
+There is no `run-local.sh` or demo agent: the cluster is developed and
+tested in KIND (exception X-6).
+
+### 15.6 Rule exceptions
+
+| # | Rule | Exception | Why | Status |
+|---|---|---|---|---|
+| X-1 | SecurityRules | Agent ↔ relay authentication (tokens, agent certificates) is done by the relay, not `ISecurityProvider` | A machine credential on the wire protocol's hot path, needed while the management plane is down; issuing and revoking stay under `ISecurityProvider` | Approved (2026-09-25) |
+| X-2 | SecurityRules | Tunnel-visitor access control (IP lists, basic auth, OIDC cookies, SSH access tokens) and SSH gateway keys are done by the relay | Anonymous internet clients of the tunnel owner, not Layer 8 users | Approved (2026-09-25) |
+| X-3 | SingleOwnerDatabaseTable | None any more: the registry owns the live tables | Resolved by design | Resolved |
+| X-4 | PrdCompliance (l8erp layout) | `go/cmd/*` and `go/tunnel/*` keep their layout; new code follows `go/tun/…` | They are the standalone product and the shared data-plane library | Approved (2026-09-25) |
+| X-5 | DeploymentArtifacts | The root `Dockerfile`'s standalone images stay distroless | They never join a vnet or load a security plugin | Approved (2026-09-25) |
+| X-6 | RunLocalScript | No `run-local.sh` and no demo agent | The cluster is developed and tested in KIND | Waived (2026-09-26) |

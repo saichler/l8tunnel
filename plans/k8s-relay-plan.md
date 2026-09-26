@@ -1677,3 +1677,37 @@ Docker or kubectl. It only runs the systemd relay and sshd.
     (`445d183`)
   - applying a change to one slice element left the element empty, so a
     PATCH that added list elements stored blanks (`647e2d1`)
+
+### 16.14 K6 decisions and findings (2026-09-26)
+
+- **Logs work in every mode.** Every process writes its logs under the
+  security config's log directory, `/data/logs/l8tunnel` (the relay and
+  edge send their data-plane logs to stdout, so they land in `.log`, not
+  `.err`). Each pod also mounts that directory from a hostPath shared on
+  its node, where the node's `log-agent` collects it. l8erp's per-pod
+  volumes leave its agent only its own files.
+- **One description, four manifests.** The four modes are generated from
+  one description of the workloads, so their images, env, ports and volumes
+  can't drift; only the workload kinds, storage and placement differ.
+  Every mode validates against the Kubernetes API (server dry-run); only
+  KIND runs here.
+- **Added to every mode:** the relays' headless Service (the StatefulSet
+  named a governing Service that didn't exist) and a NetworkPolicy that
+  keeps the relays' ports inside the cluster; `NET_BIND_SERVICE` for the
+  edge. `deploy.sh` waits for each app whatever its kind in the mode.
+- **A relay's accounts snapshot is named per pod**, since local mode's two
+  relays share `/data`.
+- **Mock data** goes through the real services: `TunIssue` for tokens and
+  certificates, FileStore for the sites' certificates, and one `TunClaim`
+  announce per simulated relay for its agents and tunnels (the registry
+  keeps them in memory, so they're gone after it restarts). The backend
+  refuses an expired certificate, so the data has one expiring soon but no
+  expired one. Demo operator and viewer users come through the Security
+  API.
+- **The import tool** wraps `TunIssue IMPORT` (tested in KIND); the agent CA
+  from the same export goes in with `secrets.sh`.
+- **Waived:** `run-local.sh` and the demo agent (X-6).
+- **Deferred:** the `l8tunnel-oidc` Secret and the optional first-start
+  `l8tunnel-tls` Secret (§7.2). The tunnel certificate is uploaded in the UI,
+  and OIDC login for tunnels isn't wired in cluster mode yet; a tunnel that
+  uses OIDC can't move to the cluster until it is.
