@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/saichler/l8tunnel/go/tun/access/agentcerts"
 	"github.com/saichler/l8tunnel/go/tun/access/gwkeys"
@@ -23,6 +24,7 @@ import (
 // backend is down. A snapshot on disk survives restarts.
 type accounts struct {
 	mu       sync.RWMutex
+	downAt   time.Time // last failed live lookup
 	tokens   map[string]*auth.TokenRecord // by token ID
 	keys     map[string]*auth.GatewayKey  // by fingerprint
 	snapshot string
@@ -38,16 +40,59 @@ func newAccounts(vnic ifs.IVNic, snapshot string) *accounts {
 	return &accounts{tokens: map[string]*auth.TokenRecord{}, keys: map[string]*auth.GatewayKey{}, snapshot: snapshot, vnic: vnic}
 }
 
-// TokenByID implements relay.TokenStore.
+// liveLookupBackoff: after a failed live lookup, the cache answers alone
+// for this long, so agent handshakes don't wait on a down backend.
+const liveLookupBackoff = 30 * time.Second
+
+// TokenByID implements relay.TokenStore. Agent handshakes are rare, so the
+// token and its certificate serials are looked up live: a token issued a
+// moment ago works at once, and a revoked one is refused at once. While the
+// backend is unreachable the cache answers.
 func (a *accounts) TokenByID(id string) (*auth.TokenRecord, error) {
 	a.mu.RLock()
+	down := time.Since(a.downAt) < liveLookupBackoff
+	a.mu.RUnlock()
+	if !down {
+		rec, err := a.fetchToken(id)
+		if err == nil {
+			a.mu.Lock()
+			if rec == nil {
+				delete(a.tokens, id)
+			} else {
+				a.tokens[id] = rec
+			}
+			a.mu.Unlock()
+			return copyRecord(rec), nil
+		}
+		a.mu.Lock()
+		a.downAt = time.Now()
+		a.mu.Unlock()
+		a.vnic.Resources().Logger().Warning("live token lookup failed; using the cache: ", err.Error())
+	}
+	a.mu.RLock()
 	defer a.mu.RUnlock()
-	rec := a.tokens[id]
+	return copyRecord(a.tokens[id]), nil
+}
+
+// fetchToken reads one token and its valid certificate serials.
+func (a *accounts) fetchToken(id string) (*auth.TokenRecord, error) {
+	t, err := tokens.Token(id, a.vnic)
+	if err != nil || t == nil {
+		return nil, err
+	}
+	certs, err := agentcerts.Certs(a.vnic)
+	if err != nil {
+		return nil, err
+	}
+	return common.TokenRecord(t, agentcerts.ValidSerials(id, certs))
+}
+
+func copyRecord(rec *auth.TokenRecord) *auth.TokenRecord {
 	if rec == nil {
-		return nil, nil
+		return nil
 	}
 	cp := *rec
-	return &cp, nil
+	return &cp
 }
 
 // GatewayKeyByFingerprint implements relay.GatewayKeyStore.

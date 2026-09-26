@@ -301,6 +301,7 @@ func waitReady(t testing.TB, ra *runningAgent) *runningAgent {
 	select {
 	case <-ra.agent.Ready():
 	case err := <-ra.done:
+		ra.done <- err // let the cleanup's receive complete
 		t.Fatalf("agent stopped before it was ready: %v", err)
 	case <-time.After(10 * time.Second):
 		t.Fatal("agent was not ready within 10s")

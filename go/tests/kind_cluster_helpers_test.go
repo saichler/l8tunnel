@@ -22,6 +22,7 @@ import (
 
 	"github.com/saichler/l8tunnel/go/tun/common"
 	"github.com/saichler/l8tunnel/go/tunnel/agent"
+	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 	"github.com/saichler/l8tunnel/go/tunnel/transport"
 	"github.com/saichler/l8tunnel/go/types/tun"
 )
@@ -126,7 +127,7 @@ func installTunnelCert(t *testing.T, c *kindClient) *kindCA {
 	c.mustDo(put, common.AreaEdge, common.DomainService, base, nil)
 	for _, addr := range []string{kindRelay0TLS, kindRelay1TLS} {
 		waitUntil(t, 90*time.Second, "relay "+addr+" serving the tunnel certificate", func() bool {
-			conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: kindControl, RootCAs: ca.pool(t), NextProtos: []string{"h2"}})
+			conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: kindControl, RootCAs: ca.pool(t), NextProtos: []string{protocol.ALPN}})
 			if err != nil {
 				return false
 			}
