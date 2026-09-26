@@ -151,6 +151,22 @@ func TestKindEdgeProxy(t *testing.T) {
 			t.Fatalf("passthrough site: %v", err)
 		}
 		conn.Close()
+
+		// A certificate replaced in the UI is served without a restart: the
+		// new CA verifies the site.
+		renewed := newKindCANames(t, site)
+		stored = domainsNamed(t, c, site)[0]
+		stored.CertStoragePath = upload(t, c, site+"-2.crt", renewed.certPEM).StoragePath
+		stored.KeyStoragePath = upload(t, c, site+"-2.key", renewed.keyPEM).StoragePath
+		c.mustDo(put, common.AreaEdge, common.DomainService, stored, nil)
+		waitUntil(t, 60*time.Second, "the replaced certificate served", func() bool {
+			resp, err := relayHTTPSClient(t, renewed, kindEdgeHTTPS).Get("https://" + site + "/")
+			if err != nil {
+				return false
+			}
+			resp.Body.Close()
+			return true
+		})
 	})
 
 	t.Run("edge report and a port that can't bind", func(t *testing.T) {

@@ -137,6 +137,28 @@ func TestKindEdgeDomains(t *testing.T) {
 		Domain: uniqueName("db") + ".example.test", PortForwards: []*tun.EdgePortForward{{ListenPort: 22500,
 			Protocol: tun.EdgeProtocol_EDGE_PROTOCOL_TCP, Mode: tun.EdgeForwardMode_EDGE_FORWARD_MODE_PASSTHROUGH,
 			TargetKind: tun.EdgeTargetKind_EDGE_TARGET_KIND_NODE_LOCAL, TargetPort: 5432}}})
+	// Sites share 443 by SNI, but not a TCP port.
+	shared := &tun.EdgeDomain{Domain: uniqueName("raw") + ".example.test", Kind: tun.EdgeDomainKind_EDGE_DOMAIN_KIND_SITE, Enabled: true,
+		PortForwards: []*tun.EdgePortForward{{ListenPort: 443, Protocol: tun.EdgeProtocol_EDGE_PROTOCOL_TLS,
+			Mode: tun.EdgeForwardMode_EDGE_FORWARD_MODE_PASSTHROUGH, TargetKind: tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS,
+			Targets: []string{"10.0.0.12:443"}, Enabled: true}, {ListenPort: 6001, Protocol: tun.EdgeProtocol_EDGE_PROTOCOL_TCP,
+			Mode: tun.EdgeForwardMode_EDGE_FORWARD_MODE_PASSTHROUGH, TargetKind: tun.EdgeTargetKind_EDGE_TARGET_KIND_NODE_LOCAL,
+			TargetPort: 5432, Enabled: true}}}
+	c.mustDo(post, common.AreaEdge, common.DomainService, shared, nil)
+	sharedRow := domainsNamed(t, c, shared.Domain)[0]
+	t.Cleanup(func() {
+		c.remove(common.AreaEdge, common.DomainService, "EdgeDomain", "domainId="+sharedRow.DomainId)
+	})
+	tcpOn := func(port int32, protocol tun.EdgeProtocol) *tun.EdgeDomain {
+		return &tun.EdgeDomain{Domain: uniqueName("clash") + ".example.test", Kind: tun.EdgeDomainKind_EDGE_DOMAIN_KIND_SITE, Enabled: true,
+			PortForwards: []*tun.EdgePortForward{{ListenPort: port, Protocol: protocol, Mode: tun.EdgeForwardMode_EDGE_FORWARD_MODE_PASSTHROUGH,
+				TargetKind: tun.EdgeTargetKind_EDGE_TARGET_KIND_NODE_LOCAL, TargetPort: 5432, Enabled: true}}}
+	}
+	c.expectRefused("a TCP port another site uses", "can't be shared", post, common.AreaEdge, common.DomainService,
+		tcpOn(6001, tun.EdgeProtocol_EDGE_PROTOCOL_TCP))
+	c.expectRefused("TCP on a TLS port", "is TLS on domain", post, common.AreaEdge, common.DomainService,
+		tcpOn(443, tun.EdgeProtocol_EDGE_PROTOCOL_TCP))
+
 	// A wildcard site name under the base domain would cover tunnels.
 	c.expectRefused("wildcard under base", "cover tunnel names", post, common.AreaEdge, common.DomainService,
 		&tun.EdgeDomain{Domain: "x." + base, Aliases: []string{"*.apps." + base}})

@@ -10,15 +10,20 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// ClaimHandler serves TunClaim: every relay request goes to the engine.
+// ClaimHandler serves TunClaim: every relay request goes to the engine. A
+// claim first reloads the reservations and site names, so a reservation
+// made a moment ago is honored at once.
 type ClaimHandler struct {
 	common.ActionStubs
 }
 
-func (h *ClaimHandler) Post(elems ifs.IElements, _ ifs.IVNic) ifs.IElements {
+func (h *ClaimHandler) Post(elems ifs.IElements, vnic ifs.IVNic) ifs.IElements {
 	req, ok := elems.Element().(*tun.TunClaimRequest)
 	if !ok {
 		return object.NewError("invalid TunClaimRequest")
+	}
+	if req.Kind == tun.TunClaimKind_TUN_CLAIM_KIND_CLAIM {
+		h.Arg(1).(*directory).refreshForClaim(vnic)
 	}
 	return object.New(nil, h.Arg(0).(*claims.Engine).Handle(req))
 }
@@ -39,9 +44,9 @@ func (h *CtlHandler) Post(elems ifs.IElements, _ ifs.IVNic) ifs.IElements {
 	return object.New(nil, cmd)
 }
 
-func activateAction(vnic ifs.IVNic, handler ifs.IServiceHandler, engine *claims.Engine, name string, req, resp proto.Message) {
+func activateAction(vnic ifs.IVNic, handler ifs.IServiceHandler, engine *claims.Engine, dir *directory, name string, req, resp proto.Message) {
 	sla := ifs.NewServiceLevelAgreement(handler, name, common.AreaLive, false, nil)
-	sla.SetArgs(engine)
+	sla.SetArgs(engine, dir)
 	ws := web.New(name, common.AreaLive, 0)
 	ws.AddEndpoint(req, ifs.POST, resp)
 	sla.SetWebService(ws)

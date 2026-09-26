@@ -114,6 +114,22 @@ func TestKindReservationsAndGatewayKeys(t *testing.T) {
 		c.expectRefused(what, "", post, common.AreaAccess, common.ReservationService, r)
 	}
 
+	// A claim right after the reservation gets its port, and another token
+	// can't take the name.
+	ca := installTunnelCert(t, c)
+	a := waitReady(t, kindAgent(t, ca, kindRelay0TLS, resp.Token, uniqueName("ragent"),
+		agent.TunnelConfig{Name: name, Type: tcpType, Target: startEchoServer(t)}))
+	if port := a.agent.Endpoints()[0].GetPublicPort(); port != 22123 {
+		t.Fatalf("reserved port: got %d, want 22123", port)
+	}
+	stopAgent(t, a)
+	other := issueToken(t, c, uniqueName("kro"), nil)
+	t.Cleanup(func() { revokeToken(c, other.TokenId) })
+	if err := runAgentKindExpectError(t, ca, kindRelay1TLS, other.Token,
+		agent.TunnelConfig{Name: name, Type: tcpType, Target: startEchoServer(t)}); err == nil {
+		t.Fatal("another token claimed a reserved name")
+	}
+
 	pub, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)

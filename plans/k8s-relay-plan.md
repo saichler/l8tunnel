@@ -614,9 +614,9 @@ generator of their own):
 
 - `Before(POST)` generates `tokenId` (`common.GenerateID`) and validates the
   name and policy with the shared `auth` validators.
-- `secretHash` is written only by `TunIssue`, or by import. The security
-  config blanks it for UI roles (field-level deny rule
-  `tuntoken.secrethash`), and only the relay service role can read it.
+- `secretHash` is written only by `TunIssue`, or by import. The UI never
+  shows it, and a PUT with an empty hash keeps the stored one. There's no
+  field-level deny rule for it (removed in K7, §16.15).
 - `DELETE` revokes the token. Relays see the notification and drop that
   token's sessions for good, and its certificates stop validating (today's
   revocation behavior, cluster-wide).
@@ -738,8 +738,8 @@ The project never activates `Events` itself (l8common does), and the UI
     members, which l8secure trusts (§16.3). The vnet's ports aren't
     forwarded on the router, and joining needs the shared secret.
   - Mock data is uploaded over REST as a normal `admin` user.
-- **Deny rules** blank `secretHash` for every UI user. Relays read it over
-  the vnet.
+- **No deny rule on `secretHash`** (removed in K7, §16.15). Relays read it
+  over the vnet.
 - **FileStore:** the rules are action-level on the message types. Upload
   (`L8FileUploadRequest`) and download (`L8FileDownloadRequest`) are
   allowed for `admin` only. Operators and viewers see a domain's certificate
@@ -1291,7 +1291,7 @@ Platforms:
 | NoGoGenerics | None | K7 grep |
 | FrameworkInterfaceBoundaries | No changes to `l8types/go/ifs`; existing extension points (ServiceCallback, IServiceCacheListener) | K7 review |
 | SingleOwnerDatabaseTable | Every service has exactly one owner process (§5.2): ORM services in the backend; `TunLive`/`TunAgent`/`TunRelay` in the registry; `EdgeNode` in the backend. Relays, edge and UI only use vnic | K7 grep for `Activate` per `main.go` |
-| SecurityRules / SecurityConfigStructure / AssociateIdsScopeView | Management plane: ISecurityProvider only; config JSON in l8secure; users via area 73; no l8secure import; field deny for `secretHash`. Data plane: §5.7 boundary, exceptions X-1 and X-2, both approved (§15) | K1, K7 grep and separation tests |
+| SecurityRules / SecurityConfigStructure / AssociateIdsScopeView | Management plane: ISecurityProvider only; config JSON in l8secure; users via area 73; no l8secure import; no field deny (§16.15). Data plane: §5.7 boundary, exceptions X-1 and X-2, both approved (§15) | K1, K7 grep and separation tests |
 | EventsServiceRequired | Never activated by the project; `EventRecord` registered; events §5.4 | K1, K7 grep |
 | NotifyServiceRequired | `Notify().Send` only; types registered; no `net/smtp` or Slack code | K4, K7 grep |
 | LogServicesRequired / L8Logs | log-vnet and log-agent in every artifact list; LOGPATH `/data/logs/l8tunnel`; the SYS log viewer | K6 |
@@ -1388,7 +1388,8 @@ What that changes in the plan:
 - `simulated` records are gated by the `L8TUNNEL_ALLOW_SIMULATED=true`
   environment variable on the owning process (set only by `run-local.sh`
   and the KIND manifests), not by a role.
-- The `secretHash` field-deny rule protects it from every UI user.
+- `secretHash` is a bcrypt hash of 32 random bytes; the UI never shows it.
+  The field-deny rule planned for it was removed in K7 (§16.15).
 
 ### 16.4 FileStore
 
@@ -1711,3 +1712,36 @@ Docker or kubectl. It only runs the systemd relay and sshd.
   `l8tunnel-tls` Secret (§7.2). The tunnel certificate is uploaded in the UI,
   and OIDC login for tunnels isn't wired in cluster mode yet; a tunnel that
   uses OIDC can't move to the cluster until it is.
+
+### 16.15 K7 findings (2026-09-26)
+
+- **Compliance walk:** no generics, no l8secure import, tests only in
+  `go/tests`, gofmt clean, no PEM files, `dist/` or `vendor/` tracked, every
+  enum has UNSPECIFIED, service names up to 10 characters, one owner per
+  main. `base-core.css` was split (`base-noc.css`) to stay under the size
+  limit.
+- **Old agents:** the 5b19bbc agent binary works through the cluster
+  (mode A through the edge, HTTP, its version on the agent record).
+- **TERMINATE balanced per connection, not per request.** The edge kept one
+  HTTP connection pool per forward, so a keep-alive client stuck to one
+  backend (40 requests, all to one member). `httpproxy` now asks a
+  `Balancer` for a backend per request and pools connections per backend,
+  as §3.4 says; relay tunnels are unchanged. SOURCE_HASH on TERMINATE now
+  sees the client address (it got an empty one before).
+- **A UI read of tokens broke them.** The `tuntoken.secrethash` deny rule
+  (on admin, the only role in use) blanked the hash in the backend's cache:
+  l8utils' query cache passes its cached objects to `ScopeItem`, which
+  blanks denied fields in place. After anyone listed tokens, relays read an
+  empty hash and refused those agents. The rule was removed from the
+  security config: the hash of a 32-byte random secret gives nothing away,
+  and the UI never shows it. The framework behavior is noted for its owner
+  (ReportInfraBugs); `TestKindTokenSurvivesUIRead` guards it.
+- **New coverage:** per-request balancing and connection reuse, WebSocket
+  and upstream certificate verification through the edge, weights within
+  5% over 1,000 connections, agent token vs management bearer, relay pod
+  loss (the agent comes back through the edge with the same port), the
+  agent record (OS, arch, IP through the edge, RTT, heartbeat, a clean stop
+  parking every tunnel), traffic and the agent's session through a registry
+  restart, and an agent connecting with an imported token.
+- **Not tested:** operator and viewer behavior. Every user is admin in this
+  deployment.
