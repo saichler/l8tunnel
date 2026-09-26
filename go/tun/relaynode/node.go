@@ -2,14 +2,11 @@ package relaynode
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -53,11 +50,11 @@ func Run(ctx context.Context, vnic ifs.IVNic, version string, logger *slog.Logge
 	if n.relayID == "" || n.podIP == "" {
 		return fmt.Errorf("POD_NAME and POD_IP must be set (the pod's name and IP)")
 	}
-	key, err := readSecret("forward-key")
+	key, err := common.ForwardKey()
 	if err != nil {
 		return err
 	}
-	n.link = &link{vnic: vnic, relayID: n.relayID, key: key}
+	n.link = &link{vnic: vnic, relayID: n.relayID, key: key, live: common.NewLiveView(vnic, ownersTTL)}
 	n.accounts = newAccounts(vnic, snapshotFile)
 	if err := n.loadAccounts(ctx, logger); err != nil {
 		return err
@@ -136,7 +133,7 @@ func (n *Node) relayConfig(logger *slog.Logger) (relay.Config, error) {
 		cfg.HTTPAddr = ":" + strconv.Itoa(c.Relay.HTTP)
 	}
 	if c.Public.Gateway > 0 {
-		keyPEM, err := readSecret("gateway-host-key")
+		keyPEM, err := common.ReadClusterSecret("gateway-host-key")
 		if err != nil {
 			return relay.Config{}, err
 		}
@@ -147,23 +144,6 @@ func (n *Node) relayConfig(logger *slog.Logger) (relay.Config, error) {
 		cfg.SSHGateway = &relay.GatewayConfig{Listen: ":" + strconv.Itoa(c.Relay.Gateway), HostKey: signer, Keys: n.accounts}
 	}
 	return cfg, nil
-}
-
-// readSecret reads a file of the l8tunnel-cluster Secret. forward-key is
-// stored as hex.
-func readSecret(name string) ([]byte, error) {
-	data, err := os.ReadFile(filepath.Join(common.Cluster().SecretDir, name))
-	if err != nil {
-		return nil, fmt.Errorf("cluster secret %s: %w", name, err)
-	}
-	if name == "forward-key" {
-		key, err := hex.DecodeString(strings.TrimSpace(string(data)))
-		if err != nil || len(key) < 32 {
-			return nil, fmt.Errorf("cluster secret forward-key must be at least 32 bytes of hex")
-		}
-		return key, nil
-	}
-	return data, nil
 }
 
 func (n *Node) loop(ctx context.Context) {

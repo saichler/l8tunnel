@@ -36,6 +36,22 @@ nodes:
       - {containerPort: 31443, hostPort: 31443, protocol: TCP}
       - {containerPort: 31444, hostPort: 31444, protocol: TCP}
       - {containerPort: 31222, hostPort: 31222, protocol: TCP}
+      # The edge's public ports (host port -> node port): 443, 80, the
+      # first ten mode A ports, the SSH gateway, and a port for site tests.
+      - {containerPort: 443, hostPort: 18443, protocol: TCP}
+      - {containerPort: 80, hostPort: 18080, protocol: TCP}
+      - {containerPort: 2222, hostPort: 12222, protocol: TCP}
+      - {containerPort: 6000, hostPort: 16000, protocol: TCP}
+      - {containerPort: 22000, hostPort: 22000, protocol: TCP}
+      - {containerPort: 22001, hostPort: 22001, protocol: TCP}
+      - {containerPort: 22002, hostPort: 22002, protocol: TCP}
+      - {containerPort: 22003, hostPort: 22003, protocol: TCP}
+      - {containerPort: 22004, hostPort: 22004, protocol: TCP}
+      - {containerPort: 22005, hostPort: 22005, protocol: TCP}
+      - {containerPort: 22006, hostPort: 22006, protocol: TCP}
+      - {containerPort: 22007, hostPort: 22007, protocol: TCP}
+      - {containerPort: 22008, hostPort: 22008, protocol: TCP}
+      - {containerPort: 22009, hostPort: 22009, protocol: TCP}
 KIND
 
 echo "Creating KIND cluster '${CLUSTER_NAME}'..."
@@ -49,6 +65,7 @@ IMAGES=(
   saichler/l8tunnel-web:latest
   saichler/l8tunnel-registry:latest
   saichler/l8tunnel-relay:latest
+  saichler/l8tunnel-edge:latest
 )
 for img in "${IMAGES[@]}"; do
   if docker image inspect "$img" &>/dev/null; then

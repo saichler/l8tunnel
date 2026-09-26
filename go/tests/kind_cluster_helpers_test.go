@@ -74,6 +74,12 @@ type kindCA struct {
 
 func newKindCA(t *testing.T) *kindCA {
 	t.Helper()
+	return newKindCANames(t, kindBase, "*."+kindBase)
+}
+
+// newKindCANames is a CA and a certificate for names.
+func newKindCANames(t *testing.T, names ...string) *kindCA {
+	t.Helper()
 	caKey, leafKey := mustKey(t), mustKey(t)
 	caTmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "kind test CA"},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().AddDate(0, 3, 0), IsCA: true,
@@ -83,8 +89,8 @@ func newKindCA(t *testing.T) *kindCA {
 		t.Fatal(err)
 	}
 	caCert, _ := x509.ParseCertificate(caDER)
-	leafTmpl := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: kindControl},
-		DNSNames: []string{kindBase, "*." + kindBase}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().AddDate(0, 2, 0),
+	leafTmpl := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: names[0]},
+		DNSNames: names, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().AddDate(0, 2, 0),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
 	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
 	if err != nil {

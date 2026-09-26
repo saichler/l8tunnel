@@ -6,8 +6,8 @@
 # between the pod network and the host network (the same fix l8alarms and
 # secscan use).
 #
-# Deployed so far: vnet, backend, web, registry and two relays; the edge and
-# the log services join in later phases. The relays run on the pod network
+# Deployed: vnet, backend, web, registry, two relays and the edge; the log
+# services join in K6. The relays run on the pod network
 # (two replicas on one node can't share host ports) and reach the vnet at
 # NODE_IP; the per-relay NodePort Services let the tests reach each relay
 # directly until the edge exists.
@@ -390,3 +390,79 @@ spec:
     - {name: tls, port: 8443, targetPort: 8443, nodePort: 31443}
     - {name: stream, port: 8444, targetPort: 8444, nodePort: 31444}
     - {name: gateway, port: 2222, targetPort: 2222, nodePort: 31222}
+
+---
+
+# The edge: the reverse proxy and load balancer the router forwards to. It
+# uses the host network (it binds the public ports) and, in production,
+# runs only on the node the router points at.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: l8tunnel
+  name: l8tunnel-edge
+  labels:
+    app: l8tunnel-edge
+spec:
+  serviceName: l8tunnel-edge
+  replicas: 1
+  selector:
+    matchLabels:
+      app: l8tunnel-edge
+  template:
+    metadata:
+      labels:
+        app: l8tunnel-edge
+    spec:
+      hostNetwork: true
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: l8tunnel-edge
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: l8tunnel-edge
+          image: saichler/l8tunnel-edge:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: L8TUNNEL_CLUSTER_CONFIG
+              value: /etc/l8tunnel/cluster/cluster.yaml
+          livenessProbe:
+            httpGet: {path: /healthz, port: 9180}
+            periodSeconds: 10
+          volumeMounts:
+            - name: hdata
+              mountPath: /data
+            - name: cluster
+              mountPath: /etc/l8tunnel/cluster
+              readOnly: true
+            - name: cluster-secret
+              mountPath: /etc/l8tunnel/cluster-secret
+              readOnly: true
+      volumes:
+        - name: cluster
+          configMap:
+            name: l8tunnel-cluster
+        - name: cluster-secret
+          secret:
+            secretName: l8tunnel-cluster
+            defaultMode: 0400
+  volumeClaimTemplates:
+    - metadata:
+        name: hdata
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 1Gi

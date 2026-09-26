@@ -14,7 +14,13 @@ import (
 // caPool returns a pool trusting the relay's test CA.
 func caPool(t *testing.T, env *relayEnv) *x509.CertPool {
 	t.Helper()
-	pem, err := os.ReadFile(env.pki.caFile)
+	return caPoolFile(t, env.pki.caFile)
+}
+
+// caPoolFile returns a pool trusting the CA in a PEM file.
+func caPoolFile(t *testing.T, file string) *x509.CertPool {
+	t.Helper()
+	pem, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}

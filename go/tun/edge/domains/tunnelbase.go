@@ -9,10 +9,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// tunnelBaseForwards are the TUNNEL_BASE row's port forwards, derived from
+// TunnelBaseForwards are the TUNNEL_BASE row's port forwards, derived from
 // cluster.yaml. They follow the relay configuration, so the UI can't edit
 // them.
-func tunnelBaseForwards() []*tun.EdgePortForward {
+func TunnelBaseForwards() []*tun.EdgePortForward {
 	c := common.Cluster()
 	relay := func(id string, port, end int32, proto tun.EdgeProtocol, target int) *tun.EdgePortForward {
 		return &tun.EdgePortForward{
@@ -47,7 +47,7 @@ func EnsureTunnelBase(vnic ifs.IVNic) error {
 	if err != nil {
 		return err
 	}
-	want := tunnelBaseForwards()
+	want := TunnelBaseForwards()
 	for _, d := range all {
 		if d.Kind != tun.EdgeDomainKind_EDGE_DOMAIN_KIND_TUNNEL_BASE {
 			continue

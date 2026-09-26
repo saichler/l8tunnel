@@ -5,6 +5,7 @@ package httpproxy
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -31,6 +32,11 @@ const (
 	// StateActive: the tunnel is connected and can serve requests.
 	StateActive
 )
+
+// ErrUnavailable is what a Tunnel's OpenStream returns when nothing can
+// serve the request right now (for example no healthy backend behind the
+// edge); the proxy answers 503 instead of 502.
+var ErrUnavailable = errors.New("no healthy backend")
 
 // Tunnel is an active HTTP tunnel.
 type Tunnel interface {
@@ -254,6 +260,10 @@ func (p *Proxy) newTunnelProxy(tun Tunnel) *tunnelProxy {
 		ErrorLog:      slog.NewLogLogger(p.log.Handler(), slog.LevelDebug),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			p.log.Warn("proxying to tunnel failed", "host", r.Host, "error", err)
+			if errors.Is(err, ErrUnavailable) {
+				writeError(w, http.StatusServiceUnavailable, errUnavailable, r.Host)
+				return
+			}
 			writeError(w, http.StatusBadGateway, errUpstream, r.Host)
 		},
 	}

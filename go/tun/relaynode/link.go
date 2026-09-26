@@ -4,11 +4,8 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"strings"
-	"sync"
 	"time"
 
-	l8common "github.com/saichler/l8common/go/common"
 	"github.com/saichler/l8tunnel/go/tun/common"
 	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 	"github.com/saichler/l8tunnel/go/tunnel/relay"
@@ -32,10 +29,7 @@ type link struct {
 	relayID string
 	key     []byte
 
-	mu      sync.Mutex
-	owners  map[string]*tun.TunLiveTunnel // by name and by custom domain
-	relays  map[string]*tun.TunRelay
-	fetched time.Time
+	live *common.LiveView
 }
 
 // ask sends a request to the claims engine.
@@ -163,64 +157,15 @@ func (l *link) StreamOwnerOf(name string) (string, bool, bool) {
 
 // owner finds the active tunnel serving host on another relay.
 func (l *link) owner(host string) (*tun.TunLiveTunnel, *tun.TunRelay) {
-	host = strings.ToLower(host)
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if time.Since(l.fetched) > ownersTTL {
-		l.fetch()
-	}
-	key := host
-	if name := common.Cluster().Rules().TunnelName(host); name != "" {
-		key = name
-	}
-	rec := l.owners[key]
-	stale := rec == nil || rec.RelayId == l.relayID || rec.State != tun.TunLiveState_TUN_LIVE_STATE_ACTIVE
-	if stale && time.Since(l.fetched) > time.Second {
-		// The copy says nobody (or this relay) serves it, yet the caller
-		// found no local tunnel: it may have just moved. Look again, at
-		// most once a second.
-		l.fetch()
-		rec = l.owners[key]
-	}
-	if rec == nil || rec.RelayId == l.relayID || rec.State != tun.TunLiveState_TUN_LIVE_STATE_ACTIVE {
+	// This relay found no local tunnel, so a copy naming it as the owner is
+	// stale.
+	t, r := l.live.Tunnel(host, l.relayID)
+	if t == nil || t.RelayId == l.relayID {
 		return nil, nil
 	}
-	r := l.relays[rec.RelayId]
-	if r == nil || r.State == tun.TunRelayState_TUN_RELAY_STATE_DOWN || r.PodIp == "" {
-		return nil, nil
-	}
-	return rec, r
-}
-
-// fetch reloads the live tables (callers hold l.mu).
-func (l *link) fetch() {
-	tunnels, err := l8common.GetEntities(common.LiveService, common.AreaLive, &tun.TunLiveTunnel{}, l.vnic)
-	if err != nil {
-		return
-	}
-	relays, err := l8common.GetEntities(common.RelayService, common.AreaLive, &tun.TunRelay{}, l.vnic)
-	if err != nil {
-		return
-	}
-	l.owners, l.relays = map[string]*tun.TunLiveTunnel{}, map[string]*tun.TunRelay{}
-	for _, e := range tunnels {
-		if t, ok := e.(*tun.TunLiveTunnel); ok && t.Name != "" {
-			l.owners[t.Name] = t
-			for _, d := range t.Domains {
-				l.owners[d] = t
-			}
-		}
-	}
-	for _, e := range relays {
-		if r, ok := e.(*tun.TunRelay); ok && r.RelayId != "" {
-			l.relays[r.RelayId] = r
-		}
-	}
-	l.fetched = time.Now()
+	return t, r
 }
 
 func (l *link) invalidate() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.fetched = time.Time{}
+	l.live.Invalidate()
 }

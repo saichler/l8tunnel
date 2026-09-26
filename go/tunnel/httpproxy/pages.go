@@ -21,6 +21,7 @@ var (
 	errUnknownHost   = pageError{"unknown-host", "Unknown host", "This relay doesn't serve this host name."}
 	errUnknownTunnel = pageError{"tunnel-not-found", "Tunnel not found", "No HTTP tunnel is registered for this host name."}
 	errAgentOffline  = pageError{"agent-offline", "Tunnel offline", "The tunnel's agent is disconnected. It may be reconnecting; try again shortly."}
+	errUnavailable   = pageError{"no-healthy-backend", "Service unavailable", "None of the site's servers is available right now. Try again in a moment."}
 	errUpstream      = pageError{"upstream-error", "Service unreachable", "The tunnel's agent is connected, but the service behind it didn't answer."}
 	errMisdirected   = pageError{"misdirected", "Misdirected request", "The Host header doesn't match the TLS server name of this connection."}
 	errIPDenied      = pageError{"ip-denied", "Forbidden", "This tunnel doesn't accept connections from your address."}

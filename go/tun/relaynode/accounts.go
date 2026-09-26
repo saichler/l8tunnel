@@ -24,7 +24,7 @@ import (
 // backend is down. A snapshot on disk survives restarts.
 type accounts struct {
 	mu       sync.RWMutex
-	downAt   time.Time // last failed live lookup
+	downAt   time.Time                    // last failed live lookup
 	tokens   map[string]*auth.TokenRecord // by token ID
 	keys     map[string]*auth.GatewayKey  // by fingerprint
 	snapshot string

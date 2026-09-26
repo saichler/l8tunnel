@@ -116,7 +116,7 @@ func protectTunnelBase(d, existing *tun.EdgeDomain) error {
 	base := common.Cluster().BaseDomain
 	d.Domain = base
 	d.Aliases = []string{"*." + base}
-	d.PortForwards = tunnelBaseForwards()
+	d.PortForwards = TunnelBaseForwards()
 	return nil
 }
 

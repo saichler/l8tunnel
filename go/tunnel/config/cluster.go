@@ -27,6 +27,7 @@ const (
 	DefaultRelayHTTPPort   = 8080
 	DefaultRelayStreamPort = 8444
 	DefaultRelayOpsPort    = 9100
+	DefaultEdgeOpsPort     = 9180
 )
 
 // ClusterFile is cluster.yaml: the settings every l8tunnel process on
@@ -66,6 +67,12 @@ type ClusterFile struct {
 	// SSH gateway's host key, the same on every relay). Default
 	// /etc/l8tunnel/cluster-secret.
 	SecretDir string `yaml:"secret_dir"`
+	// Edge settings.
+	Edge struct {
+		// Ops serves /healthz, /readyz and /metrics; default 9180 (the edge
+		// uses the host network, so it must not collide with the node).
+		Ops int `yaml:"ops"`
+	} `yaml:"edge"`
 	// AgentCA are the files of the agent CA (the l8tunnel-agent-ca Secret).
 	AgentCA struct {
 		Cert string `yaml:"cert"`
@@ -126,6 +133,7 @@ func (f *ClusterFile) normalize() error {
 	setDefault(&f.Relay.Stream, DefaultRelayStreamPort)
 	setDefault(&f.Relay.Gateway, 2222)
 	setDefault(&f.Relay.Ops, DefaultRelayOpsPort)
+	setDefault(&f.Edge.Ops, DefaultEdgeOpsPort)
 	for name, p := range map[string]int{"public.https": f.Public.HTTPS, "relay.tls": f.Relay.TLS, "relay.http": f.Relay.HTTP,
 		"relay.stream": f.Relay.Stream, "relay.gateway": f.Relay.Gateway, "relay.ops": f.Relay.Ops} {
 		if p < 1 || p > 65535 {
