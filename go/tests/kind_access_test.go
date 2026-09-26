@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/saichler/l8tunnel/go/tun/common"
+	"github.com/saichler/l8tunnel/go/tunnel/agent"
 	"github.com/saichler/l8tunnel/go/tunnel/auth"
 	"github.com/saichler/l8tunnel/go/tunnel/store"
 	"github.com/saichler/l8tunnel/go/types/tun"
@@ -194,7 +195,8 @@ func TestKindImportStandaloneExport(t *testing.T) {
 	if err := st.AddToken(rec); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.PutReservation(&store.Reservation{Name: uniqueName("impbox"), TokenID: rec.ID, Port: 22321}); err != nil {
+	boxName := uniqueName("impbox")
+	if err := st.PutReservation(&store.Reservation{Name: boxName, TokenID: rec.ID, Port: 22321}); err != nil {
 		t.Fatal(err)
 	}
 	exp, err := st.Export()
@@ -212,6 +214,15 @@ func TestKindImportStandaloneExport(t *testing.T) {
 	if tok := getToken(t, c, rec.ID); tok == nil || tok.Name != rec.Name {
 		t.Fatalf("imported token %+v (plaintext %s)", tok, plaintext)
 	}
+	// An agent connects with the token it already had and gets its
+	// reserved port.
+	ca := installTunnelCert(t, c)
+	a := waitReady(t, kindAgent(t, ca, kindRelay0TLS, plaintext, uniqueName("impagent"),
+		agent.TunnelConfig{Name: boxName, Type: sshType, Target: startEchoServer(t)}))
+	if port := a.agent.Endpoints()[0].GetPublicPort(); port != 22321 {
+		t.Fatalf("imported reservation: port %d, want 22321", port)
+	}
+	stopAgent(t, a)
 	// Re-running the import adds nothing.
 	again := &tun.TunIssueResponse{}
 	c.mustDo(post, common.AreaAccess, common.IssueService, &tun.TunIssueRequest{Kind: tun.TunIssueKind_TUN_ISSUE_KIND_IMPORT, ImportJson: data}, again)

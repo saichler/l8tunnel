@@ -48,6 +48,20 @@ type Tunnel interface {
 	Access() *auth.Access
 }
 
+// Balancer is a Tunnel with several backends (the edge's TERMINATE pools).
+// The proxy asks it for a backend per request and keeps a connection pool
+// per backend, so balancing works over keep-alive connections.
+type Balancer interface {
+	// Pick chooses the backend for a request from clientAddr; it returns
+	// ErrUnavailable when none can serve.
+	Pick(clientAddr string) (backend string, err error)
+	// OpenStreamTo opens a byte stream to a backend Pick returned.
+	OpenStreamTo(ctx context.Context, backend string) (net.Conn, error)
+}
+
+// backendKey carries the picked backend from ServeHTTP to the Rewrite.
+type backendKey struct{}
+
 // Login is the OIDC login service (oidc.Service).
 type Login interface {
 	AuthHost() string
@@ -171,6 +185,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !p.authorize(w, r, tun.Access()) {
 			return
 		}
+		if b, ok := tun.(Balancer); ok {
+			backend, err := b.Pick(r.RemoteAddr)
+			if err != nil {
+				writeError(w, http.StatusServiceUnavailable, errUnavailable, r.Host)
+				return
+			}
+			r = r.WithContext(context.WithValue(r.Context(), backendKey{}, backend))
+		}
 		p.proxyFor(tun).proxy.ServeHTTP(w, r)
 	case StateOffline:
 		writeError(w, http.StatusBadGateway, errAgentOffline, r.Host)
@@ -236,8 +258,12 @@ func (p *Proxy) proxyFor(tun Tunnel) *tunnelProxy {
 func (p *Proxy) newTunnelProxy(tun Tunnel) *tunnelProxy {
 	transport := &http.Transport{
 		// Every connection to the agent is a new stream; the address is
-		// meaningless because the tunnel decides where the stream goes.
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		// meaningless because the tunnel decides where the stream goes,
+		// except for a Balancer, where it is the picked backend.
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			if b, ok := tun.(Balancer); ok {
+				return b.OpenStreamTo(ctx, addr)
+			}
 			return tun.OpenStream(ctx, "")
 		},
 		MaxIdleConnsPerHost: 32,
@@ -249,6 +275,11 @@ func (p *Proxy) newTunnelProxy(tun Tunnel) *tunnelProxy {
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme = "http"
 			pr.Out.URL.Host = pr.In.Host
+			if backend, ok := pr.In.Context().Value(backendKey{}).(string); ok {
+				// The transport pools connections by URL host: one pool
+				// per backend.
+				pr.Out.URL.Host = backend
+			}
 			pr.Out.Host = pr.In.Host
 			if p.cfg.ForwardedHeaders {
 				pr.SetXForwarded()

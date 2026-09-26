@@ -189,9 +189,28 @@ func (p *pool) smoothRoundRobin(cands []*member) *member {
 // client bytes have been sent yet, so this is always safe). The returned
 // connection decrements the member's active count when closed.
 func (p *pool) dial(ctx context.Context, client netip.Addr) (net.Conn, *member, error) {
+	return p.dialFrom(ctx, client, nil)
+}
+
+// dialAddr connects to the member at addr (a TERMINATE request's pick),
+// falling back to the other members when that dial fails.
+func (p *pool) dialAddr(ctx context.Context, addr string) (net.Conn, *member, error) {
+	for _, m := range p.snapshot() {
+		if m.addr == addr {
+			return p.dialFrom(ctx, netip.Addr{}, m)
+		}
+	}
+	return p.dialFrom(ctx, netip.Addr{}, nil)
+}
+
+func (p *pool) dialFrom(ctx context.Context, client netip.Addr, first *member) (net.Conn, *member, error) {
 	tried := map[*member]bool{}
 	for {
-		m := p.pick(client, tried)
+		m := first
+		if m == nil {
+			m = p.pick(client, tried)
+		}
+		first = nil
 		if m == nil {
 			return nil, nil, ErrNoHealthyMember
 		}

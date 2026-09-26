@@ -186,11 +186,20 @@ func TestKindRegistryRestart(t *testing.T) {
 	tok := issueToken(t, c, uniqueName("k2r"), nil)
 	t.Cleanup(func() { revokeToken(c, tok.TokenId) })
 	name := uniqueName("keep")
-	waitReady(t, kindAgent(t, ca, kindRelay0TLS, tok.Token, uniqueName("ra"), agent.TunnelConfig{Name: name, Type: httpType, Target: startInspectServer(t)}))
-	waitUntil(t, 20*time.Second, "live record", func() bool { return liveTunnel(t, c, name) != nil })
+	agentID := uniqueName("ra")
+	waitReady(t, kindAgent(t, ca, kindRelay0TLS, tok.Token, agentID, agent.TunnelConfig{Name: name, Type: httpType, Target: startInspectServer(t)}))
+	waitUntil(t, 20*time.Second, "live record", func() bool { return liveTunnel(t, c, name) != nil && liveAgent(t, c, agentID) != nil })
+	session := liveAgent(t, c, agentID).SessionId
 
+	// Traffic keeps flowing while the registry is down: the data path
+	// doesn't depend on it.
+	probe := startTrafficProbe(relayHTTPSClient(t, ca, kindRelay0TLS), "https://"+name+"."+kindBase+"/during")
 	kubectl(t, "delete", "pod", "l8tunnel-registry-0", "--wait=true")
 	kubectl(t, "wait", "--for=condition=Ready", "pod/l8tunnel-registry-0", "--timeout=120s")
+	if ok, fail, lastErr := probe.finish(); fail > 0 || ok == 0 {
+		t.Fatalf("requests during the registry restart: %d ok, %d failed (last: %s)", ok, fail, lastErr)
+	}
+
 	// A restarted process doesn't know bearer tokens issued before it
 	// started (l8secure; plan §16.11), so log in again.
 	c = newKindClient(t, "admin", "admin")
@@ -198,6 +207,10 @@ func TestKindRegistryRestart(t *testing.T) {
 		r := liveTunnel(t, c, name)
 		return r != nil && r.RelayId == kindRelay0 && r.State == tun.TunLiveState_TUN_LIVE_STATE_ACTIVE
 	})
+	// The same session: the agent never noticed.
+	if ag := liveAgent(t, c, agentID); ag == nil || ag.SessionId != session {
+		t.Fatalf("the agent's session changed across the registry restart: %+v", ag)
+	}
 	// And new claims work again.
 	other := uniqueName("after")
 	waitReady(t, kindAgent(t, ca, kindRelay1TLS, tok.Token, uniqueName("rb"), agent.TunnelConfig{Name: other, Type: httpType, Target: startInspectServer(t)}))

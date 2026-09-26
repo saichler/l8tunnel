@@ -29,7 +29,28 @@ func (t *poolTunnel) Access() *auth.Access { return t.access }
 // OpenStream picks and dials a backend; https backends are dialed with TLS
 // (certificates verified unless the forward sets skip_verify).
 func (t *poolTunnel) OpenStream(ctx context.Context, clientAddr string) (net.Conn, error) {
-	conn, m, err := t.pool.dial(ctx, clientIP(clientAddr))
+	return t.secure(ctx, func() (net.Conn, *member, error) { return t.pool.dial(ctx, clientIP(clientAddr)) })
+}
+
+// Pick implements httpproxy.Balancer: the proxy balances each request and
+// keeps a connection pool per member.
+func (t *poolTunnel) Pick(clientAddr string) (string, error) {
+	m := t.pool.pick(clientIP(clientAddr), nil)
+	if m == nil {
+		return "", fmt.Errorf("%w: %s", httpproxy.ErrUnavailable, t.id)
+	}
+	return m.addr, nil
+}
+
+// OpenStreamTo implements httpproxy.Balancer. When the picked member
+// refuses the dial another one is used (it has just failed, so this is
+// rare), and that connection may serve later requests of the pick's pool.
+func (t *poolTunnel) OpenStreamTo(ctx context.Context, backend string) (net.Conn, error) {
+	return t.secure(ctx, func() (net.Conn, *member, error) { return t.pool.dialAddr(ctx, backend) })
+}
+
+func (t *poolTunnel) secure(ctx context.Context, dial func() (net.Conn, *member, error)) (net.Conn, error) {
+	conn, m, err := dial()
 	if errors.Is(err, ErrNoHealthyMember) {
 		return nil, fmt.Errorf("%w: %s", httpproxy.ErrUnavailable, t.id)
 	}
