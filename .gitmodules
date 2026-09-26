@@ -1,0 +1,3 @@
+[submodule "go/tun/ui/web/l8ui"]
+	path = go/tun/ui/web/l8ui
+	url = https://github.com/saichler/l8ui.git
