@@ -12,8 +12,9 @@ and registers this machine under its host name:
   https:  https://<host name>.<domain>     passed through untouched to this
           machine's own HTTPS server on port 443 (it serves the certificate;
           until something listens on 443, that address has nothing to show)
-If another machine already has the host name, a short suffix is added.
-Set HTTPS_PORT=8443 (or NAME=x) before ./install.sh to change those.
+If another machine already uses this host name, the install fails and says
+so: run it again with another name (NAME=x ./install.sh).
+Set HTTPS_PORT=8443 before ./install.sh for an HTTPS server on another port.
 
 
 There are two agent packages; use the one that matches where this machine is:

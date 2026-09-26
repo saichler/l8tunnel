@@ -27,18 +27,6 @@ esac
 DOMAIN="$(cat DOMAIN)"
 RELAY="connect.$DOMAIN:443"
 [ -s RELAY ] && RELAY="$(cat RELAY)"   # e.g. the relay's LAN address
-# reachable: a TCP connection to host:port opens within 5 s.
-reachable() { timeout 5 bash -c "</dev/tcp/${1%:*}/${1##*:}" 2>/dev/null; }
-# A machine on the relay's own network may not reach it by its public
-# address (routers often don't loop back): use the LAN address the package
-# carries when the public one doesn't answer.
-if [ -s LAN_RELAY ] && ! reachable "$RELAY"; then
-  lan="$(cat LAN_RELAY)"; case "$lan" in *:*) ;; *) lan="$lan:443" ;; esac
-  if reachable "$lan"; then
-    echo "$RELAY doesn't answer from here; using the relay's LAN address $lan"
-    RELAY="$lan"
-  fi
-fi
 CONF=/etc/l8tunnel/agent.yaml ENVF=/etc/l8tunnel/agent.env
 interactive=0; [ -t 0 ] && interactive=1
 # A package with a built-in token installs without asking anything.
@@ -148,21 +136,13 @@ if grep -q 'type: ssh' "$CONF" && ! ss -ltnH 'sport = :22' 2>/dev/null | grep -q
   echo "WARNING: nothing listens on port 22 here; start sshd (sudo systemctl enable --now sshd) or SSH won't work" >&2
 fi
 
-# name_taken: the relay refused a tunnel name another machine holds. (grep
-# reads all its input: an early exit would fail the pipeline under pipefail.)
-name_taken() {
-  journalctl -u l8tunnel-agent --since "$since" --no-pager 2>/dev/null | grep -E 'is taken|NAME_TAKEN' >/dev/null
-}
-
 # start_agent restarts the service and waits up to 15 s for it to connect.
 start_agent() {
-  since="$(date '+%Y-%m-%d %H:%M:%S')"
   systemctl restart l8tunnel-agent
   ready=0
   for i in $(seq 1 15); do
     sleep 1
     if l8tunnel-agent status --json 2>/dev/null | grep -q '"connected": true'; then ready=1; return; fi
-    name_taken && return
   done
   return 0
 }
@@ -170,29 +150,6 @@ start_agent() {
 systemctl enable --quiet l8tunnel-agent
 echo "starting the agent..."
 start_agent
-# For a configuration this run wrote, two things are fixed on the spot:
-# another machine holding the name (a short suffix is added), and a relay
-# address that doesn't answer from here, when the package carries the
-# relay's LAN address (routers that loop back to their public IP only
-# sometimes).
-lan_tried=0
-for attempt in 1 2 3; do
-  [ "$ready" -eq 1 ] || [ -z "${NAME:-}" ] && break
-  if name_taken; then
-    NAME="$NAME-$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')"
-    echo "that name is taken by another machine; using $NAME"
-  elif [ "$lan_tried" -eq 0 ] && [ -s LAN_RELAY ]; then
-    lan_tried=1
-    lan="$(cat LAN_RELAY)"; case "$lan" in *:*) ;; *) lan="$lan:443" ;; esac
-    [ "$lan" != "$RELAY" ] && reachable "$lan" || break
-    echo "$RELAY doesn't answer from here; using the relay's LAN address $lan"
-    RELAY="$lan"
-  else
-    break
-  fi
-  write_config
-  start_agent
-done
 
 echo
 echo "=================================================================="

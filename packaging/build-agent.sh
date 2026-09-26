@@ -13,8 +13,6 @@
 # <host>-ssh and https://<host>.DOMAIN passed through to the machine's own
 # HTTPS server). Anyone holding such a package can register an agent, so
 # give it a token of its own and revoke that token to retire the package.
-# ENROLL_LAN_RELAY=<ip[:port]> is the relay's LAN address, used by machines
-# on its own network when the public name doesn't answer from there.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ARCH="${1:-amd64}"
@@ -34,7 +32,6 @@ VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo d
 LABEL="$DOMAIN"; [ -n "$RELAY_ADDR" ] && LABEL="$DOMAIN-via-${RELAY_ADDR%:*}"
 ENROLL_TOKEN_FILE="${ENROLL_TOKEN_FILE:-}"
 ENROLL_EXPOSE="${ENROLL_EXPOSE:-ssh+https}"
-ENROLL_LAN_RELAY="${ENROLL_LAN_RELAY:-}"   # e.g. 192.168.1.121: used when connect.DOMAIN doesn't answer
 if [ -n "$ENROLL_TOKEN_FILE" ]; then
   grep -Eq '^l8t_[0-9a-f]+_[A-Za-z0-9_-]+$' "$ENROLL_TOKEN_FILE" || { echo "$ENROLL_TOKEN_FILE doesn't hold an agent token" >&2; exit 2; }
   case "$ENROLL_EXPOSE" in ssh|ssh+https) ;; *) echo "ENROLL_EXPOSE must be ssh or ssh+https" >&2; exit 2 ;; esac
@@ -53,7 +50,6 @@ echo "$DOMAIN" > "$STAGE/DOMAIN"
 if [ -n "$ENROLL_TOKEN_FILE" ]; then
   install -m 0600 "$ENROLL_TOKEN_FILE" "$STAGE/TOKEN"
   echo "$ENROLL_EXPOSE" > "$STAGE/EXPOSE"
-  [ -n "$ENROLL_LAN_RELAY" ] && echo "$ENROLL_LAN_RELAY" > "$STAGE/LAN_RELAY"
 fi
 chmod 0755 "$STAGE"/*.sh
 tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
