@@ -124,16 +124,23 @@ func TestKindEdgeProxy(t *testing.T) {
 		stored := domainsNamed(t, c, site)[0]
 		t.Cleanup(func() { c.remove(common.AreaEdge, common.DomainService, "EdgeDomain", "domainId="+stored.DomainId) })
 
-		var body string
+		var body, last string
+		defer func() {
+			if t.Failed() {
+				t.Logf("terminated site: last result %s", last)
+			}
+		}()
 		waitUntil(t, 60*time.Second, "terminated site served", func() bool {
-			resp, err := relayHTTPSClient(t, siteCA, kindEdgeHTTPS).Get("https://" + site + "/index.html")
+			resp, err := relayHTTPSClient(t, siteCA, kindEdgeHTTPS).Get("https://" + site + "/")
 			if err != nil {
+				last = err.Error()
 				return false
 			}
 			defer resp.Body.Close()
 			b := make([]byte, 4096)
 			n, _ := resp.Body.Read(b)
 			body = string(b[:n])
+			last = resp.Status + " " + body
 			return resp.StatusCode == http.StatusOK
 		})
 		if !strings.Contains(body, "l8tunnel") {
