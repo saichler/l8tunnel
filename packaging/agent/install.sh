@@ -170,14 +170,29 @@ start_agent() {
 systemctl enable --quiet l8tunnel-agent
 echo "starting the agent..."
 start_agent
-# Another machine already has this name: take the name with a short suffix
-# (only for a configuration this run wrote).
-if [ "$ready" -eq 0 ] && [ -n "${NAME:-}" ] && name_taken; then
-  NAME="$NAME-$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')"
-  echo "that name is taken by another machine; using $NAME"
+# For a configuration this run wrote, two things are fixed on the spot:
+# another machine holding the name (a short suffix is added), and a relay
+# address that doesn't answer from here, when the package carries the
+# relay's LAN address (routers that loop back to their public IP only
+# sometimes).
+lan_tried=0
+for attempt in 1 2 3; do
+  [ "$ready" -eq 1 ] || [ -z "${NAME:-}" ] && break
+  if name_taken; then
+    NAME="$NAME-$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')"
+    echo "that name is taken by another machine; using $NAME"
+  elif [ "$lan_tried" -eq 0 ] && [ -s LAN_RELAY ]; then
+    lan_tried=1
+    lan="$(cat LAN_RELAY)"; case "$lan" in *:*) ;; *) lan="$lan:443" ;; esac
+    [ "$lan" != "$RELAY" ] && reachable "$lan" || break
+    echo "$RELAY doesn't answer from here; using the relay's LAN address $lan"
+    RELAY="$lan"
+  else
+    break
+  fi
   write_config
   start_agent
-fi
+done
 
 echo
 echo "=================================================================="
