@@ -81,6 +81,7 @@ func TestKindRelayCluster(t *testing.T) {
 		}
 	})
 
+	parent := t // agents that outlive a subtest are tied to the parent test
 	t.Run("names are held across relays", func(t *testing.T) {
 		stopAgent(t, a)
 		waitUntil(t, 20*time.Second, "parked", func() bool {
@@ -93,7 +94,7 @@ func TestKindRelayCluster(t *testing.T) {
 			t.Fatalf("another token took a held name: %v", err)
 		}
 		// The same token reclaims it through relay-1, with the same port.
-		a = waitReady(t, kindAgent(t, ca, kindRelay1TLS, tok.Token, agentID, tunnels...))
+		a = waitReady(t, kindAgent(parent, ca, kindRelay1TLS, tok.Token, agentID, tunnels...))
 		if got := a.agent.Endpoints()[0].GetPublicPort(); got != port {
 			t.Fatalf("reclaimed port %d, want %d", got, port)
 		}

@@ -174,6 +174,14 @@ func (l *link) owner(host string) (*tun.TunLiveTunnel, *tun.TunRelay) {
 		key = name
 	}
 	rec := l.owners[key]
+	stale := rec == nil || rec.RelayId == l.relayID || rec.State != tun.TunLiveState_TUN_LIVE_STATE_ACTIVE
+	if stale && time.Since(l.fetched) > time.Second {
+		// The copy says nobody (or this relay) serves it, yet the caller
+		// found no local tunnel: it may have just moved. Look again, at
+		// most once a second.
+		l.fetch()
+		rec = l.owners[key]
+	}
 	if rec == nil || rec.RelayId == l.relayID || rec.State != tun.TunLiveState_TUN_LIVE_STATE_ACTIVE {
 		return nil, nil
 	}
