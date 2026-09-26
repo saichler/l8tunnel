@@ -52,8 +52,8 @@ github.com/saichler/l8orm v0.0.0-20260916142109-e7f0284c95ee h1:B53gbdJ+bJnTEq8v
 github.com/saichler/l8orm v0.0.0-20260916142109-e7f0284c95ee/go.mod h1:FYnievTs9ZZ3WE8pjDC1y2Mu+SnNJa7rPY5q1LJbn+A=
 github.com/saichler/l8ql v0.0.0-20260921131529-5b079580f08c h1:GXlB6QeMgHVOg2XU6XRmwCgDdwTZK+ml8gAgw1HjrhY=
 github.com/saichler/l8ql v0.0.0-20260921131529-5b079580f08c/go.mod h1:boBPUwEYgpyyTcZcqqjDDYgqkjemEO7iR8kdOwkS1S0=
-github.com/saichler/l8reflect v0.0.0-20260510153526-a40cb00e4db2 h1:2eDzFMHV/qPqgvz5Kr72q+FStRX9+JSqpX1Ay1cQIAs=
-github.com/saichler/l8reflect v0.0.0-20260510153526-a40cb00e4db2/go.mod h1:yCkCd5JQKqKG+dr6h0HYDiLvNAB8uLUUOdWApnWUw24=
+github.com/saichler/l8reflect v0.0.0-20260926044042-445d18326790 h1:GJ7IjhOkta5kfqFcyhOGEdUny7EczDdcP81ST37ovBk=
+github.com/saichler/l8reflect v0.0.0-20260926044042-445d18326790/go.mod h1:yCkCd5JQKqKG+dr6h0HYDiLvNAB8uLUUOdWApnWUw24=
 github.com/saichler/l8services v0.0.0-20260920123629-ec54a5cef7e1 h1:u4DZK8a3EeCzdqW1hbeXtPIf4zLjEXd68cmoeu0+w8A=
 github.com/saichler/l8services v0.0.0-20260920123629-ec54a5cef7e1/go.mod h1:9c3fnIfjQmQ4kyk5Nm3+LsrRWOwmbXvIzK2Xmjf8f1c=
 github.com/saichler/l8srlz v0.0.0-20260920123539-54414e15e38b h1:87ZAz+TdWPlSaRQekDKKygJYop5tk1l7PWU6VH7fyrA=
