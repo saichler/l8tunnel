@@ -1,5 +1,5 @@
-// The dashboard: KPI widgets over the live and edge tables, refreshed when
-// a live table changes.
+// The desktop dashboard: KPI widgets (numbers from tun-dashboard-core.js),
+// refreshed when a live table changes.
 (function() {
     'use strict';
 
@@ -14,47 +14,16 @@
         loadSection(section);
     }
 
-    // kpis computes the dashboard numbers from the tables.
-    function kpis(relays, agents, tunnels, nodes, domains) {
-        const real = (xs) => xs.filter(x => !x.simulated);
-        const day = Date.now() / 1000 - 86400;
-        const byType = {};
-        real(tunnels).forEach(t => {
-            const label = TunLive.enums.TUNNEL_TYPE[t.type] || 'Other';
-            byType[label] = (byType[label] || 0) + 1;
-        });
-        let unhealthy = 0;
-        TunData.liveEdges(nodes).forEach(n => (n.backends || []).forEach(b => { if (!b.healthy) unhealthy++; }));
-        const expiries = domains.map(d => Number(d.certNotAfter || 0)).filter(Boolean);
-        const soonest = expiries.length ? Math.min(...expiries) : 0;
-        return {
-            readyRelays: real(relays).filter(r => Number(r.state) === 1).length,
-            relays: real(relays).length,
-            online: real(agents).filter(a => Number(a.state) === 1).length,
-            offline24h: real(agents).filter(a => Number(a.state) !== 1 && Number(a.lastSeen || 0) >= day).length,
-            tunnels: real(tunnels).length,
-            byType: byType,
-            unhealthy: unhealthy,
-            certDays: soonest ? Math.floor((soonest * 1000 - Date.now()) / 86400000) : null
-        };
-    }
-
     async function render() {
         const grid = document.getElementById('tun-dashboard-kpis');
         if (!grid) return false;
         let k;
         try {
-            const [relays, agents, tunnels, nodes, domains] = await Promise.all([
-                TunData.list('/42/TunRelay', 'TunRelay'), TunData.list('/42/TunAgent', 'TunAgent'),
-                TunData.list('/42/TunLive', 'TunLiveTunnel'), TunData.list('/41/EdgeNode', 'EdgeNode'),
-                TunData.list('/41/EdgeDomain', 'EdgeDomain')
-            ]);
-            k = kpis(relays, agents, tunnels, nodes, domains);
+            k = await TunDashboardCore.load();
         } catch (e) {
             grid.innerHTML = '<div class="tun-muted">Dashboard data unavailable: ' + esc(e.message) + '</div>';
             return true;
         }
-        const types = Object.keys(k.byType).sort().map(t => esc(t) + ' ' + k.byType[t]).join(' · ');
         const w = (label, icon, section, value, opts) =>
             Layer8DWidget.render({ label: label, iconSvg: ICON(icon), onClick: "TunDashboard.go('" + section + "')" }, value, opts);
         grid.innerHTML = [
@@ -62,7 +31,7 @@
                 'tunnels', k.readyRelays + ' / ' + k.relays, {}),
             w('Agents online', '<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>', 'tunnels', k.online, {}),
             w('Agents offline (24 h)', '<circle cx="12" cy="12" r="10"/><path d="M4.9 4.9l14.2 14.2"/>', 'tunnels', k.offline24h, {}),
-            w('Tunnels', '<path d="M5 12h14M13 6l6 6-6 6"/>', 'tunnels', k.tunnels, { subtitle: types || 'none' }),
+            w('Tunnels', '<path d="M5 12h14M13 6l6 6-6 6"/>', 'tunnels', k.tunnels, { subtitle: esc(TunDashboardCore.typesText(k)) }),
             w('Unhealthy backends', '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
                 'edge', k.unhealthy, {}),
             w('Days to certificate expiry', '<path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/>', 'edge',
@@ -91,8 +60,8 @@
             title: 'Dashboard', subtitle: 'Relays, agents, tunnels and the edge at a glance', icon: TunIcons.tunnels
         });
         render();
-        ['TunRelay', 'TunAgent', 'TunLiveTunnel'].forEach(m => unsubscribe.push(Layer8DWebSocket.subscribe(m, refreshSoon)));
+        TunDashboardCore.LIVE_MODELS.forEach(m => unsubscribe.push(Layer8DWebSocket.subscribe(m, refreshSoon)));
     };
 
-    window.TunDashboard = { go: go, kpis: kpis };
+    window.TunDashboard = { go: go };
 })();

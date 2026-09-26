@@ -1,26 +1,53 @@
-// Reads whole l8tunnel tables for the views that aggregate them (the
-// dashboard, the router ports, the version and applied-config badges).
+// The l8tunnel HTTP layer, shared by the desktop and mobile shells: JSON
+// requests to the l8tunnel services and whole-table reads for the views
+// that aggregate them (dashboard, router ports, version and applied-config
+// badges). Each shell sets TunData.resolve to its config's endpoint
+// resolver before use.
 (function() {
     'use strict';
 
-    // list returns every row of a table. L8QL computes aggregates and
-    // totals only on page 0, so the query asks for page 0 with a limit
-    // 1000 (the most a query may ask for).
-    async function list(endpoint, model, where) {
-        const text = 'select * from ' + model + (where ? ' where ' + where : '') + ' limit 1000 page 0';
-        const resp = await fetch(Layer8DConfig.resolveEndpoint(endpoint) + '?body=' +
-            encodeURIComponent(JSON.stringify({ text: text })), { method: 'GET', headers: getAuthHeaders() });
-        if (!resp.ok) throw new Error(model + ': HTTP ' + resp.status);
-        const data = await resp.json();
-        return data.list || [];
-    }
+    const TunData = {
+        resolve: null,
 
-    // liveEdges are the real edges that reported in the last two minutes
-    // (an edge reports every 5 s).
-    function liveEdges(nodes) {
-        const since = Date.now() / 1000 - 120;
-        return nodes.filter(n => !n.simulated && Number(n.lastSeen || 0) >= since);
-    }
+        headers: function() {
+            const token = sessionStorage.getItem('bearerToken');
+            return { 'Authorization': token ? 'Bearer ' + token : '', 'Content-Type': 'application/json' };
+        },
 
-    window.TunData = { list: list, liveEdges: liveEdges };
+        // request sends a JSON body and returns the parsed response; a
+        // failure throws with the server's message.
+        request: async function(method, endpoint, body) {
+            const resp = await fetch(TunData.resolve(endpoint), {
+                method: method, headers: TunData.headers(), body: body === undefined ? undefined : JSON.stringify(body)
+            });
+            const text = await resp.text();
+            if (!resp.ok) throw new Error(text || ('HTTP ' + resp.status));
+            return text ? JSON.parse(text) : {};
+        },
+
+        // list returns every row of a table. L8QL computes totals only on
+        // page 0, so the query asks for page 0 with a limit of 500 (L8QL
+        // refuses 1000 and more).
+        list: async function(endpoint, model, where) {
+            const text = 'select * from ' + model + (where ? ' where ' + where : '') + ' limit 500 page 0';
+            const resp = await fetch(TunData.resolve(endpoint) + '?body=' + encodeURIComponent(JSON.stringify({ text: text })),
+                { method: 'GET', headers: TunData.headers() });
+            if (!resp.ok) throw new Error(model + ': HTTP ' + resp.status);
+            const data = await resp.json();
+            return data.list || [];
+        },
+
+        // liveEdges are the real edges that reported in the last two
+        // minutes (an edge reports every 5 s).
+        liveEdges: function(nodes) {
+            const since = Date.now() / 1000 - 120;
+            return nodes.filter(n => !n.simulated && Number(n.lastSeen || 0) >= since);
+        },
+
+        currentUser: function() {
+            return sessionStorage.getItem('currentUser') || '';
+        }
+    };
+
+    window.TunData = TunData;
 })();

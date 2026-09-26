@@ -9,6 +9,7 @@
     });
 
     window.initializeTunModules = function() {
+        TunData.resolve = Layer8DConfig.resolveEndpoint;
         sectionModule('tunnels', 'agents', 'initializeTunTunnelsModule', ['TunLive']);
         sectionModule('access', 'tokens', 'initializeTunAccessModule', ['TunAccess']);
         sectionModule('edge', 'domains', 'initializeTunEdgeModule', ['TunEdge']);
