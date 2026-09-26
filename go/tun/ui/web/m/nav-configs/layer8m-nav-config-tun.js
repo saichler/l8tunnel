@@ -18,8 +18,9 @@
     const live = (key, label, endpoint, model, idField, sort) =>
         s(key, label, endpoint, model, idField, { readOnly: true, realtime: true, defaultSort: sort, onRowClick: details(key) });
 
+    // The home screen is the dashboard (its KPIs sit above these cards), so
+    // there's no Dashboard module card.
     LAYER8M_NAV_CONFIG.modules = [
-        { key: 'dashboard', label: 'Dashboard', icon: 'dashboard', hasSubModules: false },
         { key: 'tunnels', label: 'Tunnels', icon: 'tunnels', hasSubModules: true },
         { key: 'access', label: 'Access', icon: 'access', hasSubModules: true },
         { key: 'edge', label: 'Edge', icon: 'edge', hasSubModules: true },

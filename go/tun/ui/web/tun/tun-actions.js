@@ -72,6 +72,7 @@
             columns: TunLive.columns.TunLiveTunnel,
             primaryKey: 'name',
             pageSize: 5,
+            serverSide: true,
             baseWhereClause: TunActionsCore.agentTunnelsWhere(agentId),
             onRowClick: (item) => openRecord('live', item.name),
             emptyMessage: 'No tunnels'

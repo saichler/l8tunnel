@@ -1,0 +1,19 @@
+{
+  "name": "l8tunnel-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright end-to-end suite for l8tunnel, driven against the KIND deployment (k8s/kind-start.sh).",
+  "scripts": {
+    "test": "playwright test",
+    "test:desktop": "playwright test --project=desktop",
+    "test:mobile": "playwright test --project=mobile",
+    "report": "playwright show-report",
+    "typecheck": "tsc",
+    "lint:scratch": "test -z \"$(find tests -name 'zzz-*')\" || (echo 'scratch specs left behind:'; find tests -name 'zzz-*'; exit 1)"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}
