@@ -8,27 +8,17 @@
     const ro = TunForms.readOnly;
     const e = TunEdge.enums;
 
-    // One port forward. Targets are "host:port" or "host:port*weight"; a
-    // leading "!" disables one.
+    // One port forward: the protocol, the incoming port and the port it
+    // forwards to. A new forward gets the rest from the backend (an ID,
+    // passthrough, this node as the target, enabled); the other settings
+    // stay hidden, and the row editors keep them on existing forwards.
+    const hidden = (key) => ({ key: key, hidden: true });
     const forwardColumns = [
-        { key: 'forwardId', label: 'ID', type: 'text' },
-        { key: 'listenPort', label: 'Port', type: 'number', required: true },
-        { key: 'listenPortEnd', label: 'To (range)', type: 'number' },
-        { key: 'protocol', label: 'Protocol', type: 'select', options: e.PROTOCOL, required: true },
-        { key: 'mode', label: 'Mode', type: 'select', options: e.MODE, required: true },
-        { key: 'targetKind', label: 'Target', type: 'select', options: e.TARGET_KIND, required: true },
-        { key: 'targets', label: 'Members', type: 'tags' },
-        { key: 'targetDns', label: 'DNS name', type: 'text' },
-        { key: 'targetPort', label: 'Target port', type: 'number' },
-        { key: 'lb', label: 'Balancing', type: 'select', options: e.LB },
-        { key: 'backendScheme', label: 'Backend', type: 'select', options: e.BACKEND_SCHEME },
-        { key: 'skipVerify', label: 'Skip verify (insecure)', type: 'checkbox' },
-        { key: 'proxyProtocol', label: 'PROXY v2', type: 'checkbox' },
-        { key: 'healthType', label: 'Health', type: 'select', options: e.HEALTH },
-        { key: 'healthPath', label: 'Health path', type: 'text' },
-        { key: 'healthInterval', label: 'Every (s)', type: 'number' },
-        { key: 'enabled', label: 'Enabled', type: 'checkbox' },
-        { key: 'note', label: 'Note', type: 'text' }
+        { key: 'protocol', label: 'Protocol', type: 'select', options: e.FORWARD_PROTOCOL, required: true },
+        { key: 'listenPort', label: 'In port', type: 'number', required: true },
+        { key: 'targetPort', label: 'To port', type: 'number', required: true },
+        ...['forwardId', 'listenPortEnd', 'mode', 'targetKind', 'targets', 'targetDns', 'lb', 'backendScheme',
+            'skipVerify', 'proxyProtocol', 'healthType', 'healthPath', 'healthInterval', 'enabled', 'note'].map(hidden)
     ];
 
     const certificateSection = () => f.section('Certificate', [

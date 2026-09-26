@@ -68,6 +68,9 @@ func validate(e interface{}, action ifs.Action, vnic ifs.IVNic) (interface{}, er
 			}
 		}
 	}
+	if d.Kind == tun.EdgeDomainKind_EDGE_DOMAIN_KIND_SITE {
+		defaultNewForwards(d)
+	}
 	// The certificate first: terminate forwards need its status.
 	if err := checkCertificate(d, existing, vnic); err != nil {
 		return nil, err
@@ -80,6 +83,27 @@ func validate(e interface{}, action ifs.Action, vnic ifs.IVNic) (interface{}, er
 		return d, nil
 	}
 	return nil, nil
+}
+
+// defaultNewForwards completes the forwards a client adds with just the
+// protocol, the incoming port and the target port (the UI's port forward
+// row): a forward without an ID is new, and gets an ID, passthrough (an
+// HTTPS port passes TLS through; the target holds the certificate), this
+// node as the target, and enabled. Existing forwards keep what they have.
+func defaultNewForwards(d *tun.EdgeDomain) {
+	for _, f := range d.PortForwards {
+		if f.ForwardId != "" {
+			continue
+		}
+		l8common.GenerateID(&f.ForwardId)
+		f.Enabled = true
+		if f.Mode == tun.EdgeForwardMode_EDGE_FORWARD_MODE_UNSPECIFIED {
+			f.Mode = tun.EdgeForwardMode_EDGE_FORWARD_MODE_PASSTHROUGH
+		}
+		if f.TargetKind == tun.EdgeTargetKind_EDGE_TARGET_KIND_UNSPECIFIED {
+			f.TargetKind = tun.EdgeTargetKind_EDGE_TARGET_KIND_NODE_LOCAL
+		}
+	}
 }
 
 // mergePatch applies the fields a patch sets to a copy of the stored domain.

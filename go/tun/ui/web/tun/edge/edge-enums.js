@@ -29,6 +29,9 @@
         SITE_KIND: { 1: 'Site' },
         CERT_STATUS: CERT_STATUS.enum, CERT_STATUS_VALUES: CERT_STATUS.values, CERT_STATUS_CLASSES: CERT_STATUS.classes,
         PROTOCOL: PROTOCOL.enum, MODE: MODE.enum, TARGET_KIND: TARGET_KIND.enum,
+        // The protocol list of a port forward row: an HTTPS port is TLS,
+        // passed through to the target.
+        FORWARD_PROTOCOL: { 1: 'HTTPS', 2: 'HTTP', 3: 'TCP' },
         BACKEND_SCHEME: BACKEND_SCHEME.enum, LB: LB.enum, HEALTH: HEALTH.enum
     };
 

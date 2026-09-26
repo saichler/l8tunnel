@@ -190,3 +190,38 @@ func TestKindAlertRulesAndEdgeNodes(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestKindSimplePortForward: the UI's port forward row sets only the
+// protocol, the incoming port and the target port. The backend fills the
+// rest of a new forward (no ID yet): an ID, passthrough, this node as the
+// target, enabled.
+func TestKindSimplePortForward(t *testing.T) {
+	c := newKindClient(t, "admin", "admin")
+	domain := uniqueName("simple") + ".kind.site"
+	site := &tun.EdgeDomain{Domain: domain, Kind: tun.EdgeDomainKind_EDGE_DOMAIN_KIND_SITE, Enabled: true,
+		PortForwards: []*tun.EdgePortForward{
+			{Protocol: tun.EdgeProtocol_EDGE_PROTOCOL_TLS, ListenPort: 16443, TargetPort: 5443},
+			{Protocol: tun.EdgeProtocol_EDGE_PROTOCOL_TCP, ListenPort: 16022, TargetPort: 22},
+		}}
+	c.mustDo(post, common.AreaEdge, common.DomainService, site, nil)
+	got := domainsNamed(t, c, domain)
+	if len(got) != 1 {
+		t.Fatalf("stored %d domains named %s", len(got), domain)
+	}
+	t.Cleanup(func() { c.remove(common.AreaEdge, common.DomainService, "EdgeDomain", "domainId="+got[0].DomainId) })
+	ids := map[string]bool{}
+	for i, f := range got[0].PortForwards {
+		if f.ForwardId == "" || ids[f.ForwardId] || f.Mode != tun.EdgeForwardMode_EDGE_FORWARD_MODE_PASSTHROUGH ||
+			f.TargetKind != tun.EdgeTargetKind_EDGE_TARGET_KIND_NODE_LOCAL || !f.Enabled {
+			t.Fatalf("forward %d not defaulted: %+v", i, f)
+		}
+		ids[f.ForwardId] = true
+	}
+	// An existing forward keeps what it has: disabling it sticks.
+	stored := got[0]
+	stored.PortForwards[1].Enabled = false
+	c.mustDo(put, common.AreaEdge, common.DomainService, stored, nil)
+	if f := domainsNamed(t, c, domain)[0].PortForwards[1]; f.Enabled || f.ForwardId != stored.PortForwards[1].ForwardId {
+		t.Fatalf("an existing forward was re-defaulted: %+v", f)
+	}
+}
