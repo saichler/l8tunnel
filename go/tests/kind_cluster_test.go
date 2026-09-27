@@ -5,6 +5,10 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -214,4 +218,82 @@ func TestKindRegistryRestart(t *testing.T) {
 	// And new claims work again.
 	other := uniqueName("after")
 	waitReady(t, kindAgent(t, ca, kindRelay1TLS, tok.Token, uniqueName("rb"), agent.TunnelConfig{Name: other, Type: httpType, Target: startInspectServer(t)}))
+}
+
+// After the registry restarts, the edge still routes new agent connections
+// to the relays: an agent that (re)connects through the edge registers.
+func TestKindEdgeSurvivesRegistryRestart(t *testing.T) {
+	c := newKindClient(t, "admin", "admin")
+	ca := installTunnelCert(t, c)
+	tok := issueToken(t, c, uniqueName("edgereg"), nil)
+	t.Cleanup(func() { revokeToken(c, tok.TokenId) })
+
+	kubectl(t, "delete", "pod", "l8tunnel-registry-0", "--wait=true")
+	kubectl(t, "wait", "--for=condition=Ready", "pod/l8tunnel-registry-0", "--timeout=120s")
+
+	name := uniqueName("afteredge")
+	a := kindAgent(t, ca, kindEdgeHTTPS, tok.Token, uniqueName("ea"), agent.TunnelConfig{Name: name, Type: tcpType, Target: startEchoServer(t)})
+	select {
+	case <-a.agent.Ready():
+	case err := <-a.done:
+		a.done <- err
+		t.Fatalf("the agent stopped before registering through the edge: %v", err)
+	case <-time.After(60 * time.Second):
+		t.Fatal("an agent connecting through the edge didn't register within 60 s of a registry restart")
+	}
+}
+
+// While the registry is down, the edge keeps routing connections to the
+// tunnels it knows from its last copy of the live tables, promptly: a
+// lookup must never wait on the registry (the outage of 2026-09-27, where
+// every new connection hung behind lookups timing out).
+func TestKindEdgeRoutesWhileRegistryIsDown(t *testing.T) {
+	c := newKindClient(t, "admin", "admin")
+	ca := installTunnelCert(t, c)
+	tok := issueToken(t, c, uniqueName("edgedown"), &tun.TunTokenPolicy{Ports: "22000-22009"})
+	t.Cleanup(func() { revokeToken(c, tok.TokenId) })
+	a := waitReady(t, kindAgent(t, ca, kindEdgeHTTPS, tok.Token, uniqueName("ed"),
+		agent.TunnelConfig{Name: uniqueName("downbox"), Type: tcpType, Target: startEchoServer(t)}))
+	addr := localAddr(int(a.agent.Endpoints()[0].GetPublicPort()))
+	if got, err := roundTrip(addr, []byte("before")); err != nil || string(got) != "before" {
+		t.Fatalf("through the edge before: %q %v", got, err)
+	}
+
+	kubectl(t, "scale", "statefulset", "l8tunnel-registry", "--replicas=0")
+	t.Cleanup(func() {
+		kubectl(t, "scale", "statefulset", "l8tunnel-registry", "--replicas=1")
+		waitUntil(t, 120*time.Second, "the registry back", func() bool {
+			out, err := exec.Command("kubectl", "--context", "kind-l8tunnel", "-n", "l8tunnel", "get", "pod", "l8tunnel-registry-0",
+				"-o", "jsonpath={.status.containerStatuses[0].ready}").Output()
+			return err == nil && string(out) == "true"
+		})
+	})
+	kubectl(t, "wait", "--for=delete", "pod/l8tunnel-registry-0", "--timeout=120s")
+	time.Sleep(3 * time.Second) // the edge's copy is now older than its refresh interval
+
+	errs := make(chan error, 5)
+	for i := 0; i < 5; i++ {
+		go func(i int) {
+			conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer conn.Close()
+			conn.SetDeadline(time.Now().Add(5 * time.Second))
+			msg := fmt.Sprintf("while down %d", i)
+			conn.Write([]byte(msg))
+			buf := make([]byte, len(msg))
+			if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != msg {
+				errs <- fmt.Errorf("connection %d: %q %v", i, buf, err)
+				return
+			}
+			errs <- nil
+		}(i)
+	}
+	for i := 0; i < 5; i++ {
+		if err := <-errs; err != nil {
+			t.Errorf("with the registry down: %v", err)
+		}
+	}
 }
