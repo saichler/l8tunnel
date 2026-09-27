@@ -269,3 +269,20 @@ func TestClaimGivesBackThePreviousPort(t *testing.T) {
 		t.Fatalf("a previous port outside the range: %+v", resp)
 	}
 }
+
+// A reservation is the explicit setting: when an admin moves it, the tunnel
+// takes the reserved port at its next claim, even while it still holds
+// (or is parked on) its old one.
+func TestClaimReservationWinsOverTheHeldPort(t *testing.T) {
+	dir := &staticDirectory{}
+	e, _, _ := newEngine(dir)
+	resp := e.Handle(claimReq("r1", "s1", "a1", "tok", sshTunnel("box", 0)))
+	if resp.Error != 0 || resp.Tunnels[0].PublicPort != 22000 {
+		t.Fatalf("first claim: %+v", resp)
+	}
+	dir.reservations = []*tun.TunReservation{{Name: "box", TokenId: "tok", PublicPort: 22007}}
+	resp = e.Handle(claimReq("r1", "s2", "a1", "tok", sshTunnel("box", 0)))
+	if resp.Error != 0 || resp.Tunnels[0].PublicPort != 22007 {
+		t.Fatalf("after moving the reservation to 22007: %+v", resp)
+	}
+}

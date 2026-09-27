@@ -123,10 +123,10 @@ func (e *Engine) active(tokenID, name string, staged map[string]*tun.TunLiveTunn
 	return n + len(staged)
 }
 
-// port picks the tunnel's public port: the requested one, else the one it
-// already holds, else its reservation's, else the one it had before its
-// agent reconnected if still free, else the lowest free port in the token's
-// range.
+// port picks the tunnel's public port: the requested one, else its
+// reservation's, else the one it already holds, else the one it had before
+// its agent reconnected if still free, else the lowest free port in the
+// token's range.
 func (e *Engine) port(req *tun.TunClaimRequest, spec, holder *tun.TunLiveTunnel, resv *tun.TunReservation,
 	reservations []*tun.TunReservation, staged map[int32]string) (int32, tun.TunClaimError, error) {
 	reservedByOther := func(p int32) bool {
@@ -145,12 +145,15 @@ func (e *Engine) port(req *tun.TunClaimRequest, spec, holder *tun.TunLiveTunnel,
 	if lo == 0 {
 		lo, hi = int32(e.cfg.Rules.PortMin), int32(e.cfg.Rules.PortMax)
 	}
+	// A reservation is the explicit setting (an admin's, or the port the
+	// tunnel was assigned), so it comes before the port the name holds: a
+	// moved reservation takes effect at the tunnel's next claim.
 	want := spec.PublicPort
-	if want == 0 && holder != nil && holder.PublicPort != 0 {
-		want = holder.PublicPort
-	}
 	if want == 0 && resv != nil && resv.PublicPort != 0 {
 		want = resv.PublicPort
+	}
+	if want == 0 && holder != nil && holder.PublicPort != 0 {
+		want = holder.PublicPort
 	}
 	if want == 0 && spec.PreviousPort >= lo && spec.PreviousPort <= hi && free(spec.PreviousPort) {
 		// The port the tunnel had before its agent reconnected, while it's
