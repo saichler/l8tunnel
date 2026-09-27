@@ -160,9 +160,12 @@ if [ "$ready" -eq 1 ]; then
   echo
   l8tunnel-agent status --json | awk -F'"' -v d="$DOMAIN" '
     /"type"/ {type=$4} /"public_address"/ {addr=$4}
-    /"hostname"/ {host=$4; if (type=="ssh" || type=="tcp") {
+    /"hostname"/ {host=$4; if (type=="ssh") {
         split(addr, a, ":"); print " SSH here from anywhere:   ssh -p " a[2] " <user>@" d
         print "   or over port 443:       ssh -o ProxyCommand=\"l8tunnel connect %h\" <user>@" host }
+      else if (type=="tcp") {
+        split(host, h, "."); print " TCP (" h[1] "):   " addr
+        print "   or over port 443:       l8tunnel connect " host }
       else if (type=="http") print " Web app:                  " addr
       else if (type=="tls") print " HTTPS (served here):      https://" host }'
 else
