@@ -17,12 +17,6 @@ import (
 	"time"
 )
 
-// Default socket paths (systemd RuntimeDirectory=l8tunnel / l8tunnel-agent).
-const (
-	DefaultServerSocket = "/run/l8tunnel/admin.sock"
-	DefaultAgentSocket  = "/run/l8tunnel-agent/status.sock"
-)
-
 // maxSocketPath is the longest Unix socket path every supported OS accepts
 // (sun_path is 108 bytes on Linux, 104 on macOS, including the NUL).
 const maxSocketPath = 103
