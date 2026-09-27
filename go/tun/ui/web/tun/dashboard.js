@@ -1,5 +1,6 @@
 // The desktop dashboard: KPI widgets (numbers from tun-dashboard-core.js),
-// refreshed when a live table changes.
+// refreshed when a live table changes, then the agent downloads and the
+// guide (tun-guide.js).
 (function() {
     'use strict';
 
@@ -60,6 +61,8 @@
             title: 'Dashboard', subtitle: 'Relays, agents, tunnels and the edge at a glance', icon: TunIcons.tunnels
         });
         render();
+        TunGuide.render(document.getElementById('tun-dashboard-guide'), '',
+            (ok, msg) => ok ? Layer8DNotification.success(msg) : Layer8DNotification.error(msg));
         TunDashboardCore.LIVE_MODELS.forEach(m => unsubscribe.push(Layer8DWebSocket.subscribe(m, refreshSoon)));
     };
 

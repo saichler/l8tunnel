@@ -1,5 +1,7 @@
 // The mobile dashboard: the same KPIs as desktop (tun-dashboard-core.js)
-// as stat cards, above the Layer8MNav home.
+// as stat cards, then the agent downloads and the guide (tun-guide.js),
+// above the Layer8MNav home; all of it shows on the home screen only
+// (Layer8MNav toggles #nav-stats).
 (function() {
     'use strict';
 
@@ -48,6 +50,8 @@
     window.initTunMobileDashboard = function() {
         stop();
         render();
+        TunGuide.render(document.getElementById('tun-m-guide'), '../',
+            (ok, msg) => ok ? Layer8MUtils.showSuccess(msg) : Layer8MUtils.showError(msg));
         Layer8MNav.showHome();
         TunDashboardCore.LIVE_MODELS.forEach(m => unsubscribe.push(Layer8DWebSocket.subscribe(m, refreshSoon)));
     };

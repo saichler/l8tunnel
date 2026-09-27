@@ -75,3 +75,72 @@
     gap: var(--layer8d-space-sm);
     margin-top: var(--layer8d-space-xs);
 }
+
+/* Dashboard: agent downloads and the guide (tun-guide.js). */
+.tun-downloads,
+.tun-guide {
+    margin-top: var(--layer8d-space-lg);
+    padding: var(--layer8d-space-md) var(--layer8d-space-lg);
+    background: var(--layer8d-bg-card);
+    border: 1px solid var(--layer8d-border);
+    border-radius: var(--layer8d-radius-md);
+    box-shadow: var(--layer8d-shadow-sm);
+    color: var(--layer8d-text-dark);
+    font-size: var(--layer8d-font-sm);
+    line-height: 1.6;
+}
+.tun-guide-heading {
+    margin: 0 0 var(--layer8d-space-sm);
+    font-size: var(--layer8d-font-lg);
+    font-weight: var(--layer8d-font-weight-semibold);
+}
+.tun-download-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--layer8d-space-sm) var(--layer8d-space-md);
+    margin: var(--layer8d-space-md) 0;
+}
+.tun-guide > summary {
+    cursor: pointer;
+    font-size: var(--layer8d-font-lg);
+    font-weight: var(--layer8d-font-weight-semibold);
+    color: var(--layer8d-primary);
+}
+.tun-guide-topics {
+    margin-top: var(--layer8d-space-md);
+}
+.tun-guide-topic {
+    border-top: 1px solid var(--layer8d-border);
+    padding: var(--layer8d-space-sm) 0;
+}
+.tun-guide-topic > summary {
+    cursor: pointer;
+    font-weight: var(--layer8d-font-weight-medium);
+}
+.tun-guide-body {
+    padding: var(--layer8d-space-sm) 0 0 var(--layer8d-space-md);
+}
+.tun-guide-body ul,
+.tun-guide-body ol {
+    margin: var(--layer8d-space-xs) 0;
+    padding-left: var(--layer8d-space-lg);
+}
+.tun-downloads code,
+.tun-guide code {
+    font-family: var(--layer8d-font-mono);
+    background: var(--layer8d-bg-light);
+    padding: 0 var(--layer8d-space-xs);
+    border-radius: var(--layer8d-radius-sm);
+}
+.tun-guide-code {
+    margin: var(--layer8d-space-xs) 0 var(--layer8d-space-sm);
+    padding: var(--layer8d-space-sm) var(--layer8d-space-md);
+    background: var(--layer8d-bg-light);
+    border: 1px solid var(--layer8d-border);
+    border-radius: var(--layer8d-radius-sm);
+    font-family: var(--layer8d-font-mono);
+    font-size: var(--layer8d-font-xs);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}

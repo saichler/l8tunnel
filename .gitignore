@@ -34,3 +34,4 @@ dist/
 vendor
 k8s/kind-cluster.yaml
 real
+go/tun/ui/web/downloads/

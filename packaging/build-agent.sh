@@ -13,6 +13,10 @@
 # <host>-ssh and https://<host>.DOMAIN passed through to the machine's own
 # HTTPS server). Anyone holding such a package can register an agent, so
 # give it a token of its own and revoke that token to retire the package.
+#
+# TEMPLATE=1 builds the same package without a token, named
+# l8tunnel-agent-download-<version>-linux-<arch>: the management UI serves it
+# and adds a new token (and the cluster's domain) to each download.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ARCH="${1:-amd64}"
@@ -32,11 +36,14 @@ VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo d
 LABEL="$DOMAIN"; [ -n "$RELAY_ADDR" ] && LABEL="$DOMAIN-via-${RELAY_ADDR%:*}"
 ENROLL_TOKEN_FILE="${ENROLL_TOKEN_FILE:-}"
 ENROLL_EXPOSE="${ENROLL_EXPOSE:-ssh+https}"
+TEMPLATE="${TEMPLATE:-}"
 if [ -n "$ENROLL_TOKEN_FILE" ]; then
   grep -Eq '^l8t_[0-9a-f]+_[A-Za-z0-9_-]+$' "$ENROLL_TOKEN_FILE" || { echo "$ENROLL_TOKEN_FILE doesn't hold an agent token" >&2; exit 2; }
   case "$ENROLL_EXPOSE" in ssh|ssh+https) ;; *) echo "ENROLL_EXPOSE must be ssh or ssh+https" >&2; exit 2 ;; esac
   LABEL="$LABEL-enroll"
 fi
+[ -n "$TEMPLATE" ] && [ -n "$ENROLL_TOKEN_FILE" ] && { echo "TEMPLATE and ENROLL_TOKEN_FILE exclude each other" >&2; exit 2; }
+[ -n "$TEMPLATE" ] && LABEL="download"
 NAME="l8tunnel-agent-${LABEL}-${VERSION}-linux-${ARCH}"
 STAGE="dist/$NAME"
 rm -rf "$STAGE" && mkdir -p "$STAGE/bin"
@@ -51,6 +58,7 @@ if [ -n "$ENROLL_TOKEN_FILE" ]; then
   install -m 0600 "$ENROLL_TOKEN_FILE" "$STAGE/TOKEN"
   echo "$ENROLL_EXPOSE" > "$STAGE/EXPOSE"
 fi
+[ -n "$TEMPLATE" ] && echo "$ENROLL_EXPOSE" > "$STAGE/EXPOSE"
 chmod 0755 "$STAGE"/*.sh
 tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
 [ -n "$ENROLL_TOKEN_FILE" ] && echo "no-questions package: token built in, exposes $ENROLL_EXPOSE"
