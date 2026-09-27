@@ -61,6 +61,11 @@ test('the guide opens, with its topics and the cluster\'s domain', async ({ app,
     const reach = topics.filter({ hasText: 'Reach a machine' });
     await reach.locator('> summary').click();
     await expect(reach.locator('.tun-guide-code').first()).toContainText(`<user>@${ENV.tunnelBase}`);
+    // Ports never change: SSH/TCP tunnels keep them past the grace period.
+    const states = topics.filter({ hasText: 'Machine and tunnel states' });
+    await states.locator('> summary').click();
+    await expect(states).toContainText('assigned automatically');
+    await expect(states).not.toContainText('the names are free again');
     const lb = topics.filter({ hasText: 'Load balancing' });
     await lb.locator('> summary').click();
     await expect(lb).toContainText('Targets');

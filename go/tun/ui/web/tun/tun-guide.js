@@ -57,9 +57,14 @@
                 '<code>l8tunnel connect &lt;name&gt;.' + esc(d) + '</code> over port 443.</li></ul>') +
             topic('Machine and tunnel states',
                 '<ul><li><b>Online / Active</b>: the agent is connected and its tunnels carry traffic.</li>' +
-                '<li><b>Grace</b>: the agent just disconnected (a reboot, a network switch). For 5 minutes its names and ports stay reserved ' +
+                '<li><b>Grace</b>: the agent just disconnected (a reboot, a network switch). For 5 minutes all its names and ports stay held ' +
                 'for it; when it reconnects in time, it gets them back unchanged.</li>' +
-                '<li><b>Offline</b>: the grace period ended; the names are free again. The agent record shows why it disconnected.</li></ul>' +
+                '<li><b>Offline</b>: the grace period ended. The agent record shows why it disconnected.</li></ul>' +
+                '<p><b>Ports never change.</b> The first time an SSH or TCP tunnel gets a port, the cluster reserves that name and port for the ' +
+                'machine\'s token (<b>Access &gt; Reservations</b>, note <i>assigned automatically</i>). The machine gets the same port back ' +
+                'whenever it returns: after a reboot, a long time offline or a restart of the whole cluster. Delete the reservation to free the port.</p>' +
+                '<p>HTTPS tunnels have no port; their names are free for other machines once the grace period ends. Add a reservation ' +
+                '(Access &gt; Reservations) to keep one for the token.</p>' +
                 '<p>Agents reconnect on their own. A laptop that changes networks is back within seconds of the new network coming up.</p>') +
             topic('Add tunnels to a machine',
                 '<p>A machine\'s tunnels are listed in <code>/etc/l8tunnel/agent.yaml</code> on the machine. To add one:</p>' +
@@ -74,7 +79,8 @@
                 'tunnel types, the number of tunnels, TCP ports and custom domains.</p>' +
                 '<ul><li><b>Access &gt; Tokens &gt; Add Token</b> issues one; the token is shown once.</li>' +
                 '<li>Deleting a token revokes it: its agents are disconnected at once and can\'t reconnect.</li>' +
-                '<li><b>Reservations</b> keep a name (and a TCP port) for one token, even while its machine is offline.</li>' +
+                '<li><b>Reservations</b> keep a name (and a TCP port) for one token, even while its machine is offline. SSH and TCP tunnels get one ' +
+                'automatically for the port they are assigned.</li>' +
                 '<li><b>Gateway keys</b> let an SSH key reach named tunnels through the SSH gateway on port 2222.</li></ul>') +
             topic('Sites on the edge',
                 '<p><b>Edge &gt; Domains</b> puts other sites behind the edge, besides the tunnels: a domain with its certificate and ' +
