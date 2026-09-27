@@ -12,7 +12,8 @@ import (
 
 // ClaimHandler serves TunClaim: every relay request goes to the engine. A
 // claim first reloads the reservations and site names, so a reservation
-// made a moment ago is honored at once.
+// made a moment ago is honored at once, and afterwards reserves the ports
+// it assigned, so they never change.
 type ClaimHandler struct {
 	common.ActionStubs
 }
@@ -22,10 +23,16 @@ func (h *ClaimHandler) Post(elems ifs.IElements, vnic ifs.IVNic) ifs.IElements {
 	if !ok {
 		return object.NewError("invalid TunClaimRequest")
 	}
-	if req.Kind == tun.TunClaimKind_TUN_CLAIM_KIND_CLAIM {
-		h.Arg(1).(*directory).refreshForClaim(vnic)
+	if req.Kind != tun.TunClaimKind_TUN_CLAIM_KIND_CLAIM {
+		return object.New(nil, h.Arg(0).(*claims.Engine).Handle(req))
 	}
-	return object.New(nil, h.Arg(0).(*claims.Engine).Handle(req))
+	dir := h.Arg(1).(*directory)
+	dir.refreshForClaim(vnic)
+	resp := h.Arg(0).(*claims.Engine).Handle(req)
+	// Reserve the assigned ports in the background: the claim doesn't wait
+	// on the backend.
+	go dir.reserveAssigned(req, resp, vnic)
+	return object.New(nil, resp)
 }
 
 // CtlHandler serves TunCtl: an operator's disconnect, drain or resume.

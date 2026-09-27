@@ -185,3 +185,41 @@ func TestKindTokenSurvivesUIRead(t *testing.T) {
 		agent.TunnelConfig{Name: uniqueName("uibox"), Type: tcpType, Target: startEchoServer(t)}))
 	stopAgent(t, a)
 }
+
+// A port a tunnel is assigned is reserved for it: it survives a restart of
+// the registry and of the agent together, and no other token can take it.
+func TestKindAssignedPortsAreReserved(t *testing.T) {
+	c := newKindClient(t, "admin", "admin")
+	ca := installTunnelCert(t, c)
+	tokA := issueToken(t, c, uniqueName("resva"), nil)
+	t.Cleanup(func() { revokeToken(c, tokA.TokenId) })
+	tokB := issueToken(t, c, uniqueName("resvb"), nil)
+	t.Cleanup(func() { revokeToken(c, tokB.TokenId) })
+	nameA, nameB := uniqueName("keepa"), uniqueName("keepb")
+	echo := startEchoServer(t)
+
+	a := waitReady(t, kindAgent(t, ca, kindRelay0TLS, tokA.Token, uniqueName("ra"), agent.TunnelConfig{Name: nameA, Type: tcpType, Target: echo}))
+	port := a.agent.Endpoints()[0].GetPublicPort()
+	waitUntil(t, 30*time.Second, "the assigned port reserved", func() bool {
+		list := &tun.TunReservationList{}
+		if err := c.query(common.AreaAccess, common.ReservationService, "select * from TunReservation where name="+nameA, list); err != nil {
+			return false
+		}
+		return len(list.List) == 1 && list.List[0].PublicPort == int32(port) && list.List[0].TokenId == tokA.TokenId
+	})
+
+	// The agent and the registry both forget the port.
+	stopAgent(t, a)
+	kubectl(t, "delete", "pod", "l8tunnel-registry-0", "--wait=true")
+	kubectl(t, "wait", "--for=condition=Ready", "pod/l8tunnel-registry-0", "--timeout=120s")
+	c = newKindClient(t, "admin", "admin")
+
+	b := waitReady(t, kindAgent(t, ca, kindRelay0TLS, tokB.Token, uniqueName("rb"), agent.TunnelConfig{Name: nameB, Type: tcpType, Target: echo}))
+	if got := b.agent.Endpoints()[0].GetPublicPort(); got == port {
+		t.Fatalf("another token got the reserved port %d", port)
+	}
+	a2 := waitReady(t, kindAgent(t, ca, kindRelay0TLS, tokA.Token, uniqueName("ra2"), agent.TunnelConfig{Name: nameA, Type: tcpType, Target: echo}))
+	if got := a2.agent.Endpoints()[0].GetPublicPort(); got != port {
+		t.Fatalf("after the restarts the tunnel got port %d, want its reserved %d", got, port)
+	}
+}

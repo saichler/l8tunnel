@@ -5,6 +5,9 @@ import (
 	"sync"
 	"time"
 
+	l8common "github.com/saichler/l8common/go/common"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/saichler/l8tunnel/go/tun/access/reservations"
 	"github.com/saichler/l8tunnel/go/tun/edge/domains"
 	"github.com/saichler/l8tunnel/go/types/tun"
@@ -79,4 +82,50 @@ func (d *directory) refresh(vnic ifs.IVNic) error {
 	defer d.mu.Unlock()
 	d.reservations, d.sites, d.loaded = resv, sites, true
 	return nil
+}
+
+// reserveAssigned keeps a reservation for every port a claim assigned, so a
+// tunnel's port never changes: whatever restarts (agent, relays, registry),
+// the reservation gives the name its port back and keeps other tokens off
+// it. A reservation that names another port for the tunnel (its fixed
+// port moved) follows the assigned one.
+func (d *directory) reserveAssigned(req *tun.TunClaimRequest, resp *tun.TunClaimResponse, vnic ifs.IVNic) {
+	if resp.Error != tun.TunClaimError_TUN_CLAIM_ERROR_UNSPECIFIED {
+		return
+	}
+	existing := map[string]*tun.TunReservation{}
+	for _, r := range d.Reservations() {
+		existing[r.Name] = r
+	}
+	changed := false
+	for _, t := range resp.Tunnels {
+		if t.PublicPort == 0 {
+			continue
+		}
+		r := existing[t.Name]
+		switch {
+		case r == nil:
+			n := &tun.TunReservation{Name: t.Name, TokenId: req.TokenId, PublicPort: t.PublicPort,
+				Note: "assigned automatically", CreatedAt: time.Now().Unix()}
+			if _, err := l8common.PostEntity(reservations.ServiceName, reservations.ServiceArea, n, vnic); err != nil {
+				vnic.Resources().Logger().Warning("registry: reserving port ", t.PublicPort, " for ", t.Name, ": ", err.Error())
+				continue
+			}
+		case r.TokenId == req.TokenId && r.PublicPort != t.PublicPort:
+			u := proto.Clone(r).(*tun.TunReservation)
+			u.PublicPort = t.PublicPort
+			if err := l8common.PutEntity(reservations.ServiceName, reservations.ServiceArea, u, vnic); err != nil {
+				vnic.Resources().Logger().Warning("registry: moving the reservation of ", t.Name, " to port ", t.PublicPort, ": ", err.Error())
+				continue
+			}
+		default:
+			continue
+		}
+		changed = true
+	}
+	if changed {
+		if err := d.refresh(vnic); err != nil {
+			vnic.Resources().Logger().Warning("registry: refresh after reserving ports: ", err.Error())
+		}
+	}
 }
