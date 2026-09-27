@@ -61,7 +61,7 @@ func (l *link) ClaimTunnel(c relay.ClaimRequest) (int, error) {
 	req := &tun.TunClaimRequest{Kind: tun.TunClaimKind_TUN_CLAIM_KIND_CLAIM, SessionId: c.SessionID, AgentId: c.AgentID,
 		TokenId: c.TokenID, MaxTunnels: int32(c.MaxTunnels), PortMin: int32(c.PortMin), PortMax: int32(c.PortMax),
 		Tunnels: []*tun.TunLiveTunnel{{TunnelId: c.TunnelID, Name: c.Name, Type: typ, Hostname: c.Hostname,
-			Domains: c.Domains, PublicPort: int32(c.PublicPort), AccessToken: c.AccessToken}}}
+			Domains: c.Domains, PublicPort: int32(c.PublicPort), PreviousPort: int32(c.PreviousPort), AccessToken: c.AccessToken}}}
 	deadline := time.Now().Add(claimRetry)
 	for {
 		resp, err := l.ask(req)

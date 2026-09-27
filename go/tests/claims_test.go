@@ -244,3 +244,28 @@ func TestClaimsEngineAnnounceAndCommands(t *testing.T) {
 		t.Fatalf("simulated claim: %+v", resp)
 	}
 }
+
+// After a registry restart nothing holds a tunnel's port; the port its
+// agent had before is given back when it's still free.
+func TestClaimGivesBackThePreviousPort(t *testing.T) {
+	e, _, _ := newEngine(&staticDirectory{})
+	withPrevious := func(name string, prev int32) *tun.TunLiveTunnel {
+		tl := sshTunnel(name, 0)
+		tl.PreviousPort = prev
+		return tl
+	}
+	resp := e.Handle(claimReq("r1", "s1", "a1", "tok", withPrevious("box", 22005)))
+	if resp.Error != 0 || resp.Tunnels[0].PublicPort != 22005 {
+		t.Fatalf("a free previous port: %+v", resp)
+	}
+	// Taken by another tunnel: the lowest free port, as without one.
+	resp = e.Handle(claimReq("r1", "s2", "a2", "tok2", withPrevious("other", 22005)))
+	if resp.Error != 0 || resp.Tunnels[0].PublicPort != 22000 {
+		t.Fatalf("a previous port another tunnel holds: %+v", resp)
+	}
+	// Outside the range: ignored.
+	resp = e.Handle(claimReq("r1", "s3", "a3", "tok3", withPrevious("far", 30000)))
+	if resp.Error != 0 || resp.Tunnels[0].PublicPort != 22001 {
+		t.Fatalf("a previous port outside the range: %+v", resp)
+	}
+}

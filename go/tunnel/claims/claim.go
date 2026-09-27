@@ -100,7 +100,7 @@ func (e *Engine) check(req *tun.TunClaimRequest, spec *tun.TunLiveTunnel, reserv
 			return nil, tun.TunClaimError_TUN_CLAIM_ERROR_NAME_TAKEN, fmt.Errorf("domain %s is taken", d)
 		}
 	}
-	rec.PublicPort = 0
+	rec.PublicPort, rec.PreviousPort = 0, 0
 	if hasPort(spec.Type) && !spec.AccessToken {
 		port, code, err := e.port(req, spec, holder, resv, reservations, stagedPorts)
 		if err != nil {
@@ -124,8 +124,9 @@ func (e *Engine) active(tokenID, name string, staged map[string]*tun.TunLiveTunn
 }
 
 // port picks the tunnel's public port: the requested one, else the one it
-// already holds, else its reservation's, else the lowest free port in the
-// token's range.
+// already holds, else its reservation's, else the one it had before its
+// agent reconnected if still free, else the lowest free port in the token's
+// range.
 func (e *Engine) port(req *tun.TunClaimRequest, spec, holder *tun.TunLiveTunnel, resv *tun.TunReservation,
 	reservations []*tun.TunReservation, staged map[int32]string) (int32, tun.TunClaimError, error) {
 	reservedByOther := func(p int32) bool {
@@ -150,6 +151,11 @@ func (e *Engine) port(req *tun.TunClaimRequest, spec, holder *tun.TunLiveTunnel,
 	}
 	if want == 0 && resv != nil && resv.PublicPort != 0 {
 		want = resv.PublicPort
+	}
+	if want == 0 && spec.PreviousPort >= lo && spec.PreviousPort <= hi && free(spec.PreviousPort) {
+		// The port the tunnel had before its agent reconnected, while it's
+		// still free (after a registry restart nothing holds it).
+		return spec.PreviousPort, 0, nil
 	}
 	if want != 0 {
 		if want < int32(e.cfg.Rules.PortMin) || want > int32(e.cfg.Rules.PortMax) {

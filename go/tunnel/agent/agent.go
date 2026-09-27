@@ -24,6 +24,7 @@ type Agent struct {
 	endpoints []*l8tunnel.Endpoint
 	targets   map[string]int // tunnel ID -> index in cfg.Tunnels
 	names     []string       // name per configured tunnel, once assigned
+	ports     []uint32       // public port per configured tunnel, once assigned
 	ready     chan struct{}
 	readyOnce sync.Once
 
@@ -54,6 +55,7 @@ func New(cfg Config) (*Agent, error) {
 		log:     log,
 		targets: map[string]int{},
 		names:   names,
+		ports:   make([]uint32, len(cfg.Tunnels)),
 		ready:   make(chan struct{}),
 		stats:   make([]tunnelStats, len(cfg.Tunnels)),
 	}, nil
@@ -128,7 +130,7 @@ func jitter(d time.Duration) time.Duration {
 }
 
 // setEndpoints maps the relay's endpoints, returned in request order, to
-// the configured targets, and remembers assigned names so reconnects ask
+// the configured targets, and remembers assigned names and ports so reconnects ask
 // for the same ones.
 func (a *Agent) setEndpoints(endpoints []*l8tunnel.Endpoint) error {
 	if len(endpoints) != len(a.cfg.Tunnels) {
@@ -140,6 +142,7 @@ func (a *Agent) setEndpoints(endpoints []*l8tunnel.Endpoint) error {
 	for i, ep := range endpoints {
 		a.targets[ep.GetTunnelId()] = i
 		a.names[i] = ep.GetName()
+		a.ports[i] = ep.GetPublicPort()
 		a.logEndpoint(ep, a.cfg.Tunnels[i].targetString())
 	}
 	a.state.connected = true
@@ -183,4 +186,15 @@ func (a *Agent) tunnelFor(tunnelID string) (TunnelConfig, *tunnelStats, bool) {
 		return TunnelConfig{}, nil, false
 	}
 	return a.cfg.Tunnels[i], &a.stats[i], true
+}
+
+// previousPort is the public port tunnel i had, asked for again on
+// reconnect unless the tunnel is configured with a fixed port.
+func (a *Agent) previousPort(i int) uint32 {
+	if a.cfg.Tunnels[i].PublicPort != 0 {
+		return 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ports[i]
 }

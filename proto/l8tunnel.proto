@@ -58,6 +58,9 @@ message TunnelSpec {
   uint32 public_port = 3; // TCP/SSH only; 0 = allocate from the relay's range
   AccessPolicy access = 4;
   repeated string domains = 5; // HTTP/TLS only: custom domains (CNAME to the relay)
+  // TCP/SSH, when public_port is 0: the port the tunnel had before the agent
+  // reconnected; the relay gives it back if it's still free.
+  uint32 previous_port = 6;
 }
 
 // AccessPolicy restricts who can use a tunnel; the relay enforces it.

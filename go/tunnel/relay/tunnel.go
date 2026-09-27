@@ -120,7 +120,7 @@ func (s *Server) openTunnel(sess *agentSession, spec *l8tunnel.TunnelSpec) (*tun
 		}
 		s.setEndpointAddress(t, port)
 	case hasPublicPort(typ) && !access.RequiresToken():
-		ln, port, err := s.listenTunnelPort(res, int(spec.GetPublicPort()), policy)
+		ln, port, err := s.listenTunnelPort(res, int(spec.GetPublicPort()), int(spec.GetPreviousPort()), policy)
 		if err != nil {
 			s.registry.rollback(res, sess, existed)
 			return nil, err
@@ -202,7 +202,7 @@ func (s *Server) httpsHost(host string) string {
 // reservation keeps its port unless a different one is requested;
 // otherwise the requested port, or the first free port in the relay's
 // range (narrowed by the token's policy), is used.
-func (s *Server) listenTunnelPort(res *reservation, requested int, policy auth.Policy) (net.Listener, int, error) {
+func (s *Server) listenTunnelPort(res *reservation, requested, previous int, policy auth.Policy) (net.Listener, int, error) {
 	held := s.registry.portOf(res)
 	if held != 0 && (requested == 0 || requested == held) {
 		ln, err := s.listen(held)
@@ -230,6 +230,14 @@ func (s *Server) listenTunnelPort(res *reservation, requested int, policy auth.P
 	lo, hi, err := s.rules.AllocationRange(policy)
 	if err != nil {
 		return nil, 0, remoteErr(l8tunnel.ErrorCode_ERROR_CODE_FORBIDDEN, "%v", err)
+	}
+	// The port the tunnel had before its agent reconnected, while it's
+	// still free (a restarted relay holds nothing).
+	if previous >= lo && previous <= hi {
+		if ln, err := s.tryListen(previous); err == nil {
+			s.registry.setPort(res, previous)
+			return ln, previous, nil
+		}
 	}
 	for port := lo; port <= hi; port++ {
 		if ln, err := s.tryListen(port); err == nil {

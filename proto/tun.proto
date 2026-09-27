@@ -484,6 +484,9 @@ message TunLiveTunnel {
   bool simulated = 17;
   string session_id = 18;
   bool access_token = 19;  // reachable only with an access token (no public port)
+  // CLAIM only: the port the tunnel had before its agent reconnected, given
+  // back when public_port is 0 and it's still free.
+  int32 previous_port = 20;
 }
 
 message TunLiveTunnelList {

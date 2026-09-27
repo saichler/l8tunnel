@@ -59,6 +59,7 @@ type ClaimRequest struct {
 	Type                        l8tunnel.TunnelType
 	Domains                     []string
 	PublicPort                  int // requested; 0 = allocate
+	PreviousPort                int // the port it had before the agent reconnected; given back if free
 	AccessToken                 bool
 }
 
@@ -89,7 +90,7 @@ func (s *Server) claimInCluster(sess *agentSession, t *tunnel, spec *l8tunnel.Tu
 		SessionID: sess.id, AgentID: sess.agentID, TokenID: sess.token.ID, MaxTunnels: policy.MaxTunnels,
 		PortMin: lo, PortMax: hi, TunnelID: t.endpoint.GetTunnelId(), Name: t.endpoint.GetName(),
 		Hostname: t.endpoint.GetHostname(), Type: t.endpoint.GetType(), Domains: t.endpoint.GetDomains(),
-		PublicPort: requested, AccessToken: t.access.RequiresToken(),
+		PublicPort: requested, PreviousPort: int(spec.GetPreviousPort()), AccessToken: t.access.RequiresToken(),
 	})
 }
 

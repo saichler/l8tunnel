@@ -114,3 +114,27 @@ func TestRelayDropsAgentThatMissesHeartbeats(t *testing.T) {
 		t.Fatalf("session dropped after %s, before 3 missed heartbeats", elapsed)
 	}
 }
+
+// A relay restart forgets which port each tunnel held. The agent asks for
+// the port it had, so it keeps it even when a lower port became free.
+func TestAgentKeepsItsPortAcrossARelayRestart(t *testing.T) {
+	env := startRelay(t, 3)
+	first := startAgent(t, env, agent.TunnelConfig{Name: "first", Type: tcpType, Target: startEchoServer(t)})
+	second := startAgent(t, env, agent.TunnelConfig{Name: "second", Type: tcpType, Target: startEchoServer(t)})
+	lower, want := first.agent.Endpoints()[0].GetPublicPort(), second.agent.Endpoints()[0].GetPublicPort()
+	if lower >= want {
+		t.Fatalf("ports %d and %d: the test needs the first one lower", lower, want)
+	}
+	before := second.agent.Endpoints()[0].GetTunnelId()
+	stopAgent(t, first)
+	env = env.restart(t)
+	waitUntil(t, 10*time.Second, "the second agent re-registered", func() bool {
+		return second.agent.Endpoints()[0].GetTunnelId() != before
+	})
+	if got := second.agent.Endpoints()[0].GetPublicPort(); got != want {
+		t.Fatalf("after the restart the second tunnel got port %d, want its old %d (the freed %d was lower)", got, want, lower)
+	}
+	if got, err := roundTrip(publicAddr(want), []byte("same port")); err != nil || string(got) != "same port" {
+		t.Fatalf("round trip on the kept port: %q %v", got, err)
+	}
+}
