@@ -140,3 +140,37 @@ func TestKindEdgePaths(t *testing.T) {
 	})
 	stopAgent(t, a)
 }
+
+// A machine published under its own domain, as ci-base is under
+// ci-base.hakudo.net: its HTTPS tunnel carries the custom domain (the edge
+// routes it by name, passed through), and its other services have fixed
+// ports on the same public address.
+func TestKindCustomDomainAndFixedPorts(t *testing.T) {
+	c := newKindClient(t, "admin", "admin")
+	ca := installTunnelCert(t, c)
+	custom := uniqueName("machine") + ".kind.site"
+	tok := issueToken(t, c, uniqueName("custom"), &tun.TunTokenPolicy{Domains: []string{custom}, Ports: "22000-22009"})
+	t.Cleanup(func() { revokeToken(c, tok.TokenId) })
+
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "custom domain") }))
+	t.Cleanup(backend.Close)
+	const fixed = 22009
+	web, box := uniqueName("cweb"), uniqueName("cbox")
+	a := waitReady(t, kindAgent(t, ca, kindEdgeHTTPS, tok.Token, uniqueName("cagent"),
+		agent.TunnelConfig{Name: web, Type: l8tunnel.TunnelType_TUNNEL_TYPE_TLS, Target: backend.Listener.Addr().String(), Domains: []string{custom}},
+		agent.TunnelConfig{Name: box, Type: tcpType, Target: startEchoServer(t), PublicPort: fixed}))
+	defer stopAgent(t, a)
+
+	// HTTPS by the custom domain, through the edge, end to end.
+	cert, body := passthroughGet(t, kindEdgeHTTPS, custom)
+	if !bytes.Equal(cert, backend.Certificate().Raw) || body != "custom domain" {
+		t.Fatalf("custom domain through the edge: body %q, backend certificate %v", body, bytes.Equal(cert, backend.Certificate().Raw))
+	}
+	// The fixed port, exactly.
+	if got := a.agent.Endpoints()[1].GetPublicPort(); got != fixed {
+		t.Fatalf("fixed port: got %d, want %d", got, fixed)
+	}
+	if got, err := roundTrip(localAddr(fixed), []byte("fixed port")); err != nil || string(got) != "fixed port" {
+		t.Fatalf("round trip on the fixed port: %q %v", got, err)
+	}
+}
