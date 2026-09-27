@@ -23,6 +23,7 @@ import (
 )
 
 var httpType = l8tunnel.TunnelType_TUNNEL_TYPE_HTTP
+var tlsType = l8tunnel.TunnelType_TUNNEL_TYPE_TLS
 
 // seenRequest is what the backend reports about the request it received.
 type seenRequest struct {

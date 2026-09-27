@@ -153,9 +153,12 @@ func (s *Server) checkDomains(sess *agentSession, typ l8tunnel.TunnelType, spec 
 	seen := map[string]bool{}
 	var out []string
 	for _, raw := range spec.GetDomains() {
-		d, err := protocol.NormalizeDomain(raw)
+		d, err := protocol.NormalizeTunnelDomain(raw)
 		if err != nil {
 			return nil, invalid("%v", err)
+		}
+		if protocol.IsWildcardDomain(d) && typ != l8tunnel.TunnelType_TUNNEL_TYPE_TLS {
+			return nil, invalid("the wildcard domain %s needs a tls tunnel (passed through, the machine serves its own certificate)", d)
 		}
 		if d == s.cfg.BaseDomain || strings.HasSuffix(d, "."+s.cfg.BaseDomain) || d == s.cfg.ControlSNI {
 			return nil, invalid("domain %s is under the relay's base domain; use the tunnel name instead", d)

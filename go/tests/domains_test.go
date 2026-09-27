@@ -16,7 +16,7 @@ import (
 	"github.com/saichler/l8tunnel/go/types/l8tunnel"
 )
 
-var domainPolicy = auth.Policy{Domains: []string{"app.custom.test", "*.shop.test", "*.nocert.test", "pt.passthrough.test"}}
+var domainPolicy = auth.Policy{Domains: []string{"app.custom.test", "*.shop.test", "*.nocert.test", "pt.passthrough.test", "*.w.passthrough.test", "*.deep.w.passthrough.test", "exact.w.passthrough.test"}}
 
 func TestHTTPTunnelOnCustomDomain(t *testing.T) {
 	env := startRelayWith(t, relayOpts{ports: 1, testPolicy: domainPolicy})
@@ -108,11 +108,51 @@ func TestTLSPassthroughOnCustomDomain(t *testing.T) {
 	}
 }
 
+// A TLS tunnel may hold a wildcard domain: every name under it with no
+// closer owner is passed through to it. An exact domain, or a closer
+// wildcard, wins; the wildcard's own parent is not covered.
+func TestWildcardDomainOnTLSPassthrough(t *testing.T) {
+	env := startRelayWith(t, relayOpts{ports: 1, testPolicy: domainPolicy})
+	backend := func() *httptest.Server {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+	wild, deep, exact := backend(), backend(), backend()
+	startAgent(t, env,
+		agent.TunnelConfig{Name: "wild", Type: tlsType, Target: wild.Listener.Addr().String(), Domains: []string{"*.w.passthrough.test"}},
+		agent.TunnelConfig{Name: "deep", Type: tlsType, Target: deep.Listener.Addr().String(), Domains: []string{"*.deep.w.passthrough.test"}},
+		agent.TunnelConfig{Name: "exact", Type: tlsType, Target: exact.Listener.Addr().String(), Domains: []string{"exact.w.passthrough.test"}})
+	for host, want := range map[string]*httptest.Server{
+		"a.w.passthrough.test":      wild,
+		"x.y.w.passthrough.test":    wild,
+		"exact.w.passthrough.test":  exact,
+		"a.deep.w.passthrough.test": deep,
+		"deep.w.passthrough.test":   wild,
+	} {
+		conn, err := tls.Dial("tcp", env.addr, &tls.Config{ServerName: host, InsecureSkipVerify: true})
+		if err != nil {
+			t.Fatalf("%s: %v", host, err)
+		}
+		got := conn.ConnectionState().PeerCertificates[0].Raw
+		conn.Close()
+		if !bytes.Equal(got, want.Certificate().Raw) {
+			t.Errorf("%s reached the wrong backend", host)
+		}
+	}
+	if conn, err := tls.Dial("tcp", env.addr, &tls.Config{ServerName: "w.passthrough.test", InsecureSkipVerify: true}); err == nil {
+		conn.Close()
+		t.Fatal("the wildcard's parent w.passthrough.test is served")
+	}
+}
+
 func TestDomainValidationAndConfig(t *testing.T) {
 	env := startRelay(t, 1)
 	for name, tc := range map[string]agent.TunnelConfig{
 		"tcp with domain": {Type: tcpType, Target: "h:1", Domains: []string{"a.example.com"}},
-		"wildcard":        {Type: httpType, Target: "h:1", Domains: []string{"*.example.com"}},
+		"http wildcard":   {Type: httpType, Target: "h:1", Domains: []string{"*.example.com"}},
+		"inner wildcard":  {Type: tlsType, Target: "h:1", Domains: []string{"a.*.example.com"}},
+		"bare wildcard":   {Type: tlsType, Target: "h:1", Domains: []string{"*.com"}},
 		"single label":    {Type: httpType, Target: "h:1", Domains: []string{"localhost"}},
 	} {
 		if _, err := agent.New(agent.Config{RelayAddr: env.addr, TLS: mustClientTLS(t, env), Token: testToken, Tunnels: []agent.TunnelConfig{tc}}); err == nil {

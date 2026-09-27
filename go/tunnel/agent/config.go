@@ -181,8 +181,11 @@ func (c *Config) validate() error {
 			return fmt.Errorf("agent: tunnel %q: custom domains apply only to http and tls tunnels", t.Name)
 		}
 		for _, d := range t.Domains {
-			if _, err := protocol.NormalizeDomain(d); err != nil {
+			if _, err := protocol.NormalizeTunnelDomain(d); err != nil {
 				return fmt.Errorf("agent: tunnel %q: %w", t.Name, err)
+			}
+			if protocol.IsWildcardDomain(d) && t.Type != l8tunnel.TunnelType_TUNNEL_TYPE_TLS {
+				return fmt.Errorf("agent: tunnel %q: the wildcard domain %s needs a tls tunnel (passed through, the machine serves its own certificate)", t.Name, d)
 			}
 		}
 		if _, _, err := net.SplitHostPort(t.Target); err != nil {

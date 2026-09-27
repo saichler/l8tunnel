@@ -6,6 +6,7 @@ import (
 	"time"
 
 	l8common "github.com/saichler/l8common/go/common"
+	"github.com/saichler/l8tunnel/go/tunnel/protocol"
 	"github.com/saichler/l8tunnel/go/types/tun"
 	"github.com/saichler/l8types/go/ifs"
 )
@@ -49,7 +50,7 @@ func NewLiveView(vnic ifs.IVNic, ttl time.Duration) *LiveView {
 }
 
 // Tunnel returns the active tunnel serving host (<name>.<base> or a custom
-// domain) and its relay. A miss, or an owner equal to stale (the caller's
+// domain, else the closest wildcard domain covering it) and its relay. A miss, or an owner equal to stale (the caller's
 // own relay ID, when it knows it doesn't serve the tunnel), refetches once.
 func (v *LiveView) Tunnel(host, stale string) (*tun.TunLiveTunnel, *tun.TunRelay) {
 	host = strings.ToLower(host)
@@ -60,7 +61,14 @@ func (v *LiveView) Tunnel(host, stale string) (*tun.TunLiveTunnel, *tun.TunRelay
 	lookup := func() (*tun.TunLiveTunnel, *tun.TunRelay) {
 		v.mu.Lock()
 		defer v.mu.Unlock()
-		return v.owner(v.byName[key])
+		t := v.byName[key]
+		for _, w := range protocol.WildcardsOf(key) {
+			if t != nil {
+				break
+			}
+			t = v.byName[w]
+		}
+		return v.owner(t)
 	}
 	v.ensure(v.ttl, false)
 	t, r := lookup()

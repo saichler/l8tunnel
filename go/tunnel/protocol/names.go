@@ -76,3 +76,34 @@ func NormalizeDomain(s string) (string, error) {
 	}
 	return d, nil
 }
+
+// NormalizeTunnelDomain is NormalizeDomain for a tunnel's custom domain,
+// which may also be a wildcard "*.<domain>" (the domain itself at least two
+// labels). A wildcard covers every name under <domain>, at any depth.
+func NormalizeTunnelDomain(s string) (string, error) {
+	rest, wild := strings.CutPrefix(s, "*.")
+	d, err := NormalizeDomain(rest)
+	if err != nil {
+		return "", fmt.Errorf("domain %q must be a host name such as app.example.com, or a wildcard such as *.example.com", s)
+	}
+	if wild {
+		return "*." + d, nil
+	}
+	return d, nil
+}
+
+// IsWildcardDomain reports whether d is a wildcard "*.<domain>".
+func IsWildcardDomain(d string) bool {
+	return strings.HasPrefix(d, "*.")
+}
+
+// WildcardsOf lists the wildcard domains that cover host, closest first:
+// a.b.example.com gives *.b.example.com, *.example.com.
+func WildcardsOf(host string) []string {
+	var out []string
+	labels := strings.Split(host, ".")
+	for i := 1; i+2 <= len(labels); i++ {
+		out = append(out, "*."+strings.Join(labels[i:], "."))
+	}
+	return out
+}

@@ -174,3 +174,27 @@ func TestKindCustomDomainAndFixedPorts(t *testing.T) {
 		t.Fatalf("round trip on the fixed port: %q %v", got, err)
 	}
 }
+
+// A wildcard domain on a TLS tunnel, as *.ci1.ci-base.hakudo.net: any name
+// under it is routed through the edge and passed through to the machine.
+func TestKindWildcardDomainThroughTheEdge(t *testing.T) {
+	c := newKindClient(t, "admin", "admin")
+	ca := installTunnelCert(t, c)
+	parent := uniqueName("wild") + ".kind.site"
+	tok := issueToken(t, c, uniqueName("wildtok"), &tun.TunTokenPolicy{Domains: []string{"*." + parent}})
+	t.Cleanup(func() { revokeToken(c, tok.TokenId) })
+
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "wildcard "+r.Host) }))
+	t.Cleanup(backend.Close)
+	a := waitReady(t, kindAgent(t, ca, kindEdgeHTTPS, tok.Token, uniqueName("wagent"),
+		agent.TunnelConfig{Name: uniqueName("wweb"), Type: l8tunnel.TunnelType_TUNNEL_TYPE_TLS, Target: backend.Listener.Addr().String(),
+			Domains: []string{"*." + parent}}))
+	defer stopAgent(t, a)
+
+	for _, host := range []string{"api." + parent, "a.b." + parent} {
+		cert, body := passthroughGet(t, kindEdgeHTTPS, host)
+		if !bytes.Equal(cert, backend.Certificate().Raw) || body != "wildcard "+host {
+			t.Fatalf("%s through the edge: body %q, backend certificate %v", host, body, bytes.Equal(cert, backend.Certificate().Raw))
+		}
+	}
+}

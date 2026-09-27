@@ -195,11 +195,18 @@ func (r *nameRegistry) setDomains(res *reservation, domains []string) error {
 }
 
 // lookupDomain resolves a custom domain like lookup does a name, and also
-// returns the reservation's name.
+// returns the reservation's name. A domain with no exact owner goes to the
+// closest wildcard that covers it.
 func (r *nameRegistry) lookupDomain(domain string) (t *tunnel, typ l8tunnel.TunnelType, name string, found bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	res := r.domains[domain]
+	for _, w := range protocol.WildcardsOf(domain) {
+		if res != nil {
+			break
+		}
+		res = r.domains[w]
+	}
 	if res == nil {
 		return nil, l8tunnel.TunnelType_TUNNEL_TYPE_UNSPECIFIED, "", false
 	}
