@@ -16,11 +16,16 @@ has to be opened on the private network.
   untouched to a service that has its own certificate.
 - **SSH and TCP tunnels:** a dedicated public port (`ssh -p 22001 ...`), or
   everything over port 443 with `ProxyCommand l8tunnel connect %h`.
+- **Custom domains:** your own names on a tunnel, including wildcards
+  (`*.dev.example.com`) passed through to the machine.
+- **Stable ports:** a tunnel keeps its public port across agent restarts,
+  network changes and relay restarts.
 - **Certificates:** your own files, or Let's Encrypt (wildcard through DNS,
   or per host through HTTP).
 - **Access control:** per-agent tokens with policies, per-tunnel IP
   allow/deny lists, HTTP basic auth, SSH access tokens, per-IP rate limits.
-- **Operations:** automatic reconnect, `status` commands, Prometheus
+- **Operations:** automatic reconnect (a laptop switching networks is back
+  within seconds), `status` commands, Prometheus
   metrics, JSON logs, systemd units, Docker images, static binaries for
   Linux, macOS and Windows.
 
@@ -101,9 +106,30 @@ certificate for them:
 - http tunnels refuse wildcards (the relay would need a wildcard
   certificate); use tls and terminate on the machine.
 
+## Names and ports stay put
+
+A tunnel's public port doesn't change once it has one. When the agent
+reconnects, the port is chosen in this order:
+
+1. the `public_port` in the tunnel's config;
+2. a reservation for the name (a reservation wins over a port the tunnel
+   happens to hold);
+3. the port the name holds while its agent is in its grace period;
+4. the port the agent had before (it remembers it and asks for it back),
+   when it is free;
+5. the lowest free port in `tcp_port_range`.
+
 A disconnected agent's names and ports stay reserved for its token for 5
-minutes, so URLs survive restarts; `l8tunnel-server reservation add` makes
-that permanent.
+minutes (grace). On a standalone relay, `l8tunnel-server reservation add`
+makes that permanent. The Kubernetes cluster reserves every port it assigns
+automatically (Access ▸ Reservations, note "assigned automatically"), for
+agents connecting to any relay, so a port survives agent restarts, reboots
+and full cluster restarts. Delete the reservation to free the port.
+
+**Network changes:** the agent checks its local addresses every 5 seconds;
+when they change (Wi-Fi to Ethernet, home to mobile) it drops the old
+connection and reconnects at once, looking the relay's name up again, and
+gets the same ports back.
 
 ## SSH from the client side
 
@@ -245,6 +271,23 @@ Anyone holding the package can register machines, so give it a token of
 its own (Access ▸ Tokens, limited to the SSH and TLS types) and revoke
 that token to retire the package. The token file stays out of git.
 
+### macOS package
+
+```bash
+./packaging/build-agent-macos.sh arm64 layer8-tunnel.info
+# -> dist/l8tunnel-agent-layer8-tunnel.info-<version>-darwin-arm64.tar.gz
+```
+
+SSH only: `install.sh` installs the agent as a launchd daemon that starts
+at boot and publishes the Mac's Remote Login (turn it on in System Settings
+▸ General ▸ Sharing) as `<name>-ssh`. `ENROLL_TOKEN_FILE` works as on
+Linux. Log: `/var/log/l8tunnel-agent.log`; restart: `sudo launchctl
+kickstart -k system/io.l8tunnel.agent`.
+
+`TEMPLATE=1` builds either package without a token
+(`l8tunnel-agent-download-...`); the cluster's management UI serves these
+templates and adds a fresh token to each download (below).
+
 ## Docker
 
 ```bash
@@ -288,19 +331,72 @@ admin password in System ▸ Security.
 | 22000-22999 | SSH/TCP tunnels by port (mode A) | the internet |
 | 2222 | the SSH gateway | the internet (optional) |
 | 80 | redirect to HTTPS | the internet (optional) |
-| 5443 | the management UI | your LAN only: never forward it |
+| 5443 | the management UI | your LAN; forward it only if the UI must be reachable from outside, with a trusted certificate installed (below) |
 
 To reach the UI from outside, forward it over one of your own SSH tunnels:
 `ssh -p <port> -L 5443:<edge node LAN IP>:5443 <user>@<domain>`, then open
 https://localhost:5443.
 
+**The UI's certificate:** the UI on 5443 presents the certificate in the
+security plugin's config, `webConfig` in
+`l8secure/go/secure/plugin/l8tunnel/l8tunnel.json` (`domainCertPem` and
+`privateKeyPem`, base64 PEM). Put a trusted certificate for your domain
+there and rebuild the images, and browsers accept
+`https://<domain>:5443`. That file then holds a private key: keep it out
+of any public repository.
+
+**Connecting machines from the dashboard:** the dashboard offers the agent
+packages for download (Linux x86-64 with SSH and HTTPS, macOS on Apple
+silicon with SSH). Each download gets a token of its own (named `pkg-...`)
+and the cluster's domain, so `./install.sh` asks nothing. Revoke the token
+to retire a copy. Below the downloads is a collapsible guide to using the
+system.
+
 **Reaching a machine:** Tunnels ▸ Live, open an SSH tunnel and press
 **Connect**: it shows the exact commands for that tunnel (by port, and over
 443 by name) with a copy button each.
 
+**From the relay's own network:** most home routers (an AT&T BGW320, for
+one) don't loop traffic for their public address back in, so on the LAN
+the domain must resolve to the edge node's LAN address. Run a resolver
+that answers it, for example dnsmasq on the edge node:
+
+```
+# /etc/dnsmasq.d/l8tunnel.conf
+address=/layer8-tunnel.info/192.168.1.121   # the domain and every name under it
+server=192.168.1.254                        # everything else: the router
+```
+
+and point the LAN devices' DNS at it. Custom domains that CNAME to the
+relay (`ci-base.hakudo.net`) need their own `address=` line. Machines that
+move between networks follow along: the agent looks the name up again on
+every reconnect.
+
+**Sites and load balancing on the edge:** Edge ▸ Domains puts other sites
+behind the edge next to the tunnels: a domain, its certificate, and port
+forwards. A port forward has a protocol (TLS and HTTP are routed by name,
+so domains can share a port; TCP owns its port), a mode (`PASSTHROUGH`
+forwards the bytes; `TERMINATE` decrypts with the domain's certificate and
+reverse-proxies HTTP, balancing each request, with WebSockets and
+`https` backends verified unless `skip_verify`), and targets: an explicit
+list (host, port, weight, disabled), every A record of a DNS name, or the
+edge's own node. Several targets are balanced with round robin (weighted),
+least connections, source hash or random, with optional TCP/HTTP/HTTPS
+health checks that take a failing target out. The UI's port forward table
+edits the protocol and ports (a new forward goes to this node); the
+targets and balancing settings are set through the API
+(`/tun/41/EdgeDomain`) for now.
+
+**When the registry is down:** the edge and the relays route from their
+last copy of the live tables, so established and new connections to known
+tunnels keep working while the registry restarts; only changes (new
+tunnels, moved ports) wait for it.
+
 **Updating an image:** the manifests use `imagePullPolicy: IfNotPresent`,
 so pull the new image on the node (`crictl pull docker.io/saichler/<image>:latest`)
-before deleting the pod.
+before deleting the pod. Restart in this order, checking that tunnels are
+back after each step: the registry, the relays one at a time, then the
+edge. Agents reconnect on their own and keep their ports.
 
 - **Development:** `k8s/kind-start.sh` creates a KIND cluster, loads the
   images, creates the Secrets and deploys; `go run ./tests/mocks/cmd
