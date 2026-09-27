@@ -129,7 +129,7 @@ func TestEdgeTLSSitesShareAPort(t *testing.T) {
 	port := freePort(t)
 	fwd := func(mode tun.EdgeForwardMode, scheme tun.EdgeBackendScheme, target string) *tun.EdgePortForward {
 		return &tun.EdgePortForward{ForwardId: "f", ListenPort: int32(port), Protocol: tun.EdgeProtocol_EDGE_PROTOCOL_TLS, Mode: mode,
-			TargetKind: tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS, Targets: []string{target}, BackendScheme: scheme, Enabled: true}
+			TargetKind: tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS, Targets: targetsOf(target), BackendScheme: scheme, Enabled: true}
 	}
 	e.Apply([]*tun.EdgeDomain{
 		{DomainId: "t", Domain: "app.custom.test", Kind: tun.EdgeDomainKind_EDGE_DOMAIN_KIND_SITE, Enabled: true,
@@ -193,7 +193,7 @@ func TestEdgeHTTPHostRoutingAndIPLists(t *testing.T) {
 		return &tun.EdgeDomain{DomainId: id, Domain: domain, Kind: tun.EdgeDomainKind_EDGE_DOMAIN_KIND_SITE, Enabled: true, AllowIps: allow,
 			PortForwards: []*tun.EdgePortForward{{ForwardId: "f", ListenPort: int32(port), Protocol: tun.EdgeProtocol_EDGE_PROTOCOL_HTTP,
 				Mode: tun.EdgeForwardMode_EDGE_FORWARD_MODE_PASSTHROUGH, TargetKind: tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS,
-				Targets: []string{backend.Listener.Addr().String()}, Enabled: true}}}
+				Targets: targetsOf(backend.Listener.Addr().String()), Enabled: true}}}
 	}
 	e.Apply([]*tun.EdgeDomain{site("a", "www.example.test"), site("b", "lan.example.test", "10.0.0.0/8")}, 1)
 	plain := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {

@@ -101,7 +101,7 @@ func TestKindEdgeDomains(t *testing.T) {
 	keyFile := upload(t, c, domain+".key", keyPEM)
 	forward := &tun.EdgePortForward{ListenPort: 443, Protocol: tun.EdgeProtocol_EDGE_PROTOCOL_TLS,
 		Mode: tun.EdgeForwardMode_EDGE_FORWARD_MODE_TERMINATE, TargetKind: tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS,
-		Targets: []string{"10.0.0.10:2443", "10.0.0.11:2443*2"}, BackendScheme: tun.EdgeBackendScheme_EDGE_BACKEND_SCHEME_HTTPS,
+		Targets: targetsOf("10.0.0.10:2443", "10.0.0.11:2443*2"), BackendScheme: tun.EdgeBackendScheme_EDGE_BACKEND_SCHEME_HTTPS,
 		Lb: tun.EdgeLbAlgorithm_EDGE_LB_ALGORITHM_ROUND_ROBIN, Enabled: true}
 	site := &tun.EdgeDomain{Domain: domain, Aliases: []string{"www." + domain}, Kind: tun.EdgeDomainKind_EDGE_DOMAIN_KIND_SITE,
 		Enabled: true, PortForwards: []*tun.EdgePortForward{forward}}
@@ -141,7 +141,7 @@ func TestKindEdgeDomains(t *testing.T) {
 	shared := &tun.EdgeDomain{Domain: uniqueName("raw") + ".example.test", Kind: tun.EdgeDomainKind_EDGE_DOMAIN_KIND_SITE, Enabled: true,
 		PortForwards: []*tun.EdgePortForward{{ListenPort: 443, Protocol: tun.EdgeProtocol_EDGE_PROTOCOL_TLS,
 			Mode: tun.EdgeForwardMode_EDGE_FORWARD_MODE_PASSTHROUGH, TargetKind: tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS,
-			Targets: []string{"10.0.0.12:443"}, Enabled: true}, {ListenPort: 6001, Protocol: tun.EdgeProtocol_EDGE_PROTOCOL_TCP,
+			Targets: targetsOf("10.0.0.12:443"), Enabled: true}, {ListenPort: 6001, Protocol: tun.EdgeProtocol_EDGE_PROTOCOL_TCP,
 			Mode: tun.EdgeForwardMode_EDGE_FORWARD_MODE_PASSTHROUGH, TargetKind: tun.EdgeTargetKind_EDGE_TARGET_KIND_NODE_LOCAL,
 			TargetPort: 5432, Enabled: true}}}
 	c.mustDo(post, common.AreaEdge, common.DomainService, shared, nil)
@@ -246,4 +246,24 @@ func TestKindSimplePortForward(t *testing.T) {
 	if f := domainsNamed(t, c, domain)[0].PortForwards[1]; f.Enabled || f.ForwardId != stored.PortForwards[1].ForwardId {
 		t.Fatalf("an existing forward was re-defaulted: %+v", f)
 	}
+
+	// Targets on an existing forward make it balance over them; removing
+	// them sends it back to this node's target port.
+	stored = domainsNamed(t, c, domain)[0]
+	stored.PortForwards[0].Targets = []*tun.EdgeTarget{{Host: "10.0.0.20", Port: 5443}, {Host: "10.0.0.21", Port: 5443, Weight: 2}}
+	c.mustDo(put, common.AreaEdge, common.DomainService, stored, nil)
+	f := domainsNamed(t, c, domain)[0].PortForwards[0]
+	if f.TargetKind != tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS || len(f.Targets) != 2 || f.Targets[1].Weight != 2 {
+		t.Fatalf("a forward with targets: %+v", f)
+	}
+	stored = domainsNamed(t, c, domain)[0]
+	stored.PortForwards[0].Targets = nil
+	c.mustDo(put, common.AreaEdge, common.DomainService, stored, nil)
+	if f := domainsNamed(t, c, domain)[0].PortForwards[0]; f.TargetKind != tun.EdgeTargetKind_EDGE_TARGET_KIND_NODE_LOCAL || len(f.Targets) != 0 {
+		t.Fatalf("a forward whose targets were removed: %+v", f)
+	}
+	// A bad target is refused with the reason.
+	stored = domainsNamed(t, c, domain)[0]
+	stored.PortForwards[0].Targets = []*tun.EdgeTarget{{Host: "10.0.0.20", Port: 0}}
+	c.expectRefused("a target without a port", "port", put, common.AreaEdge, common.DomainService, stored)
 }

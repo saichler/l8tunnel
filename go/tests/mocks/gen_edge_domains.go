@@ -81,18 +81,17 @@ func generateEdgeDomains(c *Client, s *MockDataStore, tag string) error {
 	return nil
 }
 
-// targets is a weighted pool of 1-4 members; some are disabled ("!").
-func targets(i int) []string {
+// targets is a weighted pool of 1-4 members; the second has weight 2 and
+// the fourth is disabled.
+func targets(i int) []*tun.EdgeTarget {
 	n := 1 + i%4
-	out := make([]string, 0, n)
+	out := make([]*tun.EdgeTarget, 0, n)
 	for m := 0; m < n; m++ {
-		t := fmt.Sprintf("10.20.%d.%d:8080", i, 10+m)
+		t := &tun.EdgeTarget{Host: fmt.Sprintf("10.20.%d.%d", i, 10+m), Port: 8080}
 		if m == 1 {
-			t += "*2"
+			t.Weight = 2
 		}
-		if m == 3 {
-			t = "!" + t
-		}
+		t.Disabled = m == 3
 		out = append(out, t)
 	}
 	return out

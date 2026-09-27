@@ -89,9 +89,11 @@ func validate(e interface{}, action ifs.Action, vnic ifs.IVNic) (interface{}, er
 // protocol, the incoming port and the target port (the UI's port forward
 // row): a forward without an ID is new, and gets an ID, passthrough (an
 // HTTPS port passes TLS through; the target holds the certificate), this
-// node as the target, and enabled. Existing forwards keep what they have.
+// node as the target (or its targets), and enabled. Existing forwards keep
+// what they have, except that the target kind follows the targets.
 func defaultNewForwards(d *tun.EdgeDomain) {
 	for _, f := range d.PortForwards {
+		targetKindFromTargets(f)
 		if f.ForwardId != "" {
 			continue
 		}
@@ -100,7 +102,19 @@ func defaultNewForwards(d *tun.EdgeDomain) {
 		if f.Mode == tun.EdgeForwardMode_EDGE_FORWARD_MODE_UNSPECIFIED {
 			f.Mode = tun.EdgeForwardMode_EDGE_FORWARD_MODE_PASSTHROUGH
 		}
-		if f.TargetKind == tun.EdgeTargetKind_EDGE_TARGET_KIND_UNSPECIFIED {
+	}
+}
+
+// targetKindFromTargets makes a site forward's target kind follow what the
+// UI edits: with targets, the forward balances over them; without, it goes
+// to the target port on this node. DNS and relay forwards keep their kind.
+func targetKindFromTargets(f *tun.EdgePortForward) {
+	switch f.TargetKind {
+	case tun.EdgeTargetKind_EDGE_TARGET_KIND_UNSPECIFIED, tun.EdgeTargetKind_EDGE_TARGET_KIND_NODE_LOCAL,
+		tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS:
+		if len(f.Targets) > 0 {
+			f.TargetKind = tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS
+		} else {
 			f.TargetKind = tun.EdgeTargetKind_EDGE_TARGET_KIND_NODE_LOCAL
 		}
 	}

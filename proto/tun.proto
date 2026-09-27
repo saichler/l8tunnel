@@ -293,15 +293,24 @@ message TunIssueResponse {
 
 // EdgePortForward is one row of a domain's port forwarding table (child of
 // EdgeDomain).
+// EdgeTarget is one backend of a TARGETS port forward.
+message EdgeTarget {
+  string host = 1;     // IP address or host name
+  int32 port = 2;
+  int32 weight = 3;    // relative share of the traffic; 0 means 1
+  bool disabled = 4;   // listed but gets no traffic
+}
+
 message EdgePortForward {
+  // 7 held the targets as "host:port*weight" strings before EdgeTarget.
+  reserved 7;
   string forward_id = 1;
   int32 listen_port = 2;
   int32 listen_port_end = 3;  // set only for a range
   EdgeProtocol protocol = 4;
   EdgeForwardMode mode = 5;
   EdgeTargetKind target_kind = 6;
-  // TARGETS: "host:port" or "host:port*weight"; a leading "!" disables one.
-  repeated string targets = 7;
+  repeated EdgeTarget targets = 19;  // TARGETS
   string target_dns = 8;      // DNS
   int32 target_port = 9;      // DNS and NODE_LOCAL
   EdgeBackendScheme backend_scheme = 10;

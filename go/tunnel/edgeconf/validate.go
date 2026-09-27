@@ -161,12 +161,16 @@ func checkForward(d *tun.EdgeDomain, pf *tun.EdgePortForward) error {
 func checkTarget(pf *tun.EdgePortForward, base bool) error {
 	switch pf.TargetKind {
 	case tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS:
-		targets, err := ParseTargets(pf.Targets)
-		if err != nil {
-			return err
-		}
 		enabled := 0
-		for _, t := range targets {
+		seen := map[string]bool{}
+		for _, t := range pf.Targets {
+			if err := CheckTarget(t); err != nil {
+				return err
+			}
+			if seen[Address(t)] {
+				return fmt.Errorf("target %s is listed twice", Address(t))
+			}
+			seen[Address(t)] = true
 			if !t.Disabled {
 				enabled++
 			}

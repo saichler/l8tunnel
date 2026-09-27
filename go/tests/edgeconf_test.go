@@ -10,33 +10,36 @@ import (
 	"github.com/saichler/l8tunnel/go/types/tun"
 )
 
-func TestEdgeTargetsParse(t *testing.T) {
-	good := map[string]edgeconf.Target{
-		"192.168.1.120:2443":    {Host: "192.168.1.120", Port: 2443, Weight: 1},
-		"web.lan:443*3":         {Host: "web.lan", Port: 443, Weight: 3},
-		" !10.0.0.5:80 * 2 ":    {Host: "10.0.0.5", Port: 80, Weight: 2, Disabled: true},
-		"[fd00::1]:8443":        {Host: "fd00::1", Port: 8443, Weight: 1},
-		"probler-web.svc:13443": {Host: "probler-web.svc", Port: 13443, Weight: 1},
+func TestEdgeTargetsValidate(t *testing.T) {
+	good := []*tun.EdgeTarget{
+		{Host: "192.168.1.120", Port: 2443},
+		{Host: "web.lan", Port: 443, Weight: 3},
+		{Host: "10.0.0.5", Port: 80, Weight: 2, Disabled: true},
+		{Host: "fd00::1", Port: 8443},
+		{Host: "probler-web.svc", Port: 13443, Weight: edgeconf.MaxWeight},
 	}
-	for in, want := range good {
-		got, err := edgeconf.ParseTarget(in)
-		if err != nil || got != want {
-			t.Errorf("ParseTarget(%q) = %+v, %v; want %+v", in, got, err, want)
+	for _, tg := range good {
+		if err := edgeconf.CheckTarget(tg); err != nil {
+			t.Errorf("CheckTarget(%+v): %v", tg, err)
 		}
 	}
-	if got, _ := edgeconf.ParseTarget("!h:1*2"); got.String() != "!h:1*2" {
-		t.Errorf("String round trip %q", got.String())
+	if w := edgeconf.Weight(&tun.EdgeTarget{Host: "h", Port: 1}); w != 1 {
+		t.Errorf("an unset weight is %d, want 1", w)
 	}
-	for _, bad := range []string{"", "host", "host:0", "host:70000", ":443", "h:1*0", "h:1*101", "h:1*x", "a b:1"} {
-		if _, err := edgeconf.ParseTarget(bad); err == nil {
-			t.Errorf("ParseTarget(%q) accepted", bad)
+	if a := edgeconf.Address(&tun.EdgeTarget{Host: "fd00::1", Port: 8443}); a != "[fd00::1]:8443" {
+		t.Errorf("Address = %q", a)
+	}
+	for _, bad := range []*tun.EdgeTarget{nil, {Port: 443}, {Host: "h"}, {Host: "h", Port: 70000},
+		{Host: "h", Port: 1, Weight: -1}, {Host: "h", Port: 1, Weight: edgeconf.MaxWeight + 1}, {Host: "a b", Port: 1}, {Host: "h:1", Port: 1}} {
+		if err := edgeconf.CheckTarget(bad); err == nil {
+			t.Errorf("CheckTarget(%+v) accepted", bad)
 		}
 	}
 }
 
 func forward(port, end int32, proto tun.EdgeProtocol, mode tun.EdgeForwardMode, targets ...string) *tun.EdgePortForward {
 	return &tun.EdgePortForward{ListenPort: port, ListenPortEnd: end, Protocol: proto, Mode: mode,
-		TargetKind: tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS, Targets: targets, Enabled: true}
+		TargetKind: tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS, Targets: targetsOf(targets...), Enabled: true}
 }
 
 func site(id, domain string, fwds ...*tun.EdgePortForward) *tun.EdgeDomain {
@@ -83,12 +86,14 @@ func TestEdgeDomainValidation(t *testing.T) {
 		"terminate on TCP":     site("x", "a.example.com", forward(7000, 0, tcp, term, "h:1")),
 		"relay mode on a site": site("x", "a.example.com", forward(7000, 0, tcp, relay, "h:1")),
 		"no enabled target":    site("x", "a.example.com", forward(7000, 0, tcp, pass, "!h:1")),
-		"bad target":           site("x", "a.example.com", forward(7000, 0, tcp, pass, "nohost")),
-		"same port twice":      site("x", "a.example.com", forward(7000, 0, tcp, pass, "h:1"), forward(7000, 0, tcp, pass, "h:2")),
-		"TLS range":            site("x", "a.example.com", forward(7000, 7010, tls, pass, "h:1")),
-		"wildcard domain":      site("x", "*.example.com", forward(7000, 0, tcp, pass, "h:1")),
-		"bad IP list":          func() *tun.EdgeDomain { d := site("x", "a.example.com"); d.AllowIps = []string{"lan"}; return d }(),
-		"second tunnel base":   func() *tun.EdgeDomain { d := site("x", baseDomain); d.Kind = base.Kind; return d }(),
+		"bad target": site("x", "a.example.com", &tun.EdgePortForward{ListenPort: 7000, Protocol: tcp, Mode: pass,
+			TargetKind: tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS, Targets: []*tun.EdgeTarget{{Host: "nohost"}}, Enabled: true}),
+		"target twice":       site("x", "a.example.com", forward(7000, 0, tcp, pass, "h:1", "h:1*2")),
+		"same port twice":    site("x", "a.example.com", forward(7000, 0, tcp, pass, "h:1"), forward(7000, 0, tcp, pass, "h:2")),
+		"TLS range":          site("x", "a.example.com", forward(7000, 7010, tls, pass, "h:1")),
+		"wildcard domain":    site("x", "*.example.com", forward(7000, 0, tcp, pass, "h:1")),
+		"bad IP list":        func() *tun.EdgeDomain { d := site("x", "a.example.com"); d.AllowIps = []string{"lan"}; return d }(),
+		"second tunnel base": func() *tun.EdgeDomain { d := site("x", baseDomain); d.Kind = base.Kind; return d }(),
 	}
 	for name, d := range bad {
 		if err := edgeconf.ValidateDomain(d, others, baseDomain); err == nil {

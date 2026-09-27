@@ -87,9 +87,8 @@ func (p *pool) resolveMembers(old []*member) []*member {
 	var out []*member
 	switch p.fwd.TargetKind {
 	case tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS:
-		targets, _ := edgeconf.ParseTargets(p.fwd.Targets) // validated when stored
-		for _, t := range targets {
-			out = add(t.Host, t.Port, t.Weight, t.Disabled, out)
+		for _, t := range p.fwd.Targets { // validated when stored
+			out = add(t.Host, int(t.Port), edgeconf.Weight(t), t.Disabled, out)
 		}
 	case tun.EdgeTargetKind_EDGE_TARGET_KIND_DNS:
 		ips, err := net.LookupHost(p.fwd.TargetDns)

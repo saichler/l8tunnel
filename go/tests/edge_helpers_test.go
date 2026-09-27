@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -117,11 +118,45 @@ func whoAnswers(addr string) string {
 	return string(b)
 }
 
+// target builds an EdgeTarget from the tests' short form: "host:port",
+// "host:port*weight", or "!host:port" for a disabled one.
+func target(spec string) *tun.EdgeTarget {
+	t := &tun.EdgeTarget{}
+	if strings.HasPrefix(spec, "!") {
+		t.Disabled, spec = true, spec[1:]
+	}
+	if hp, w, ok := strings.Cut(spec, "*"); ok {
+		n, err := strconv.Atoi(w)
+		if err != nil {
+			panic(spec)
+		}
+		t.Weight, spec = int32(n), hp
+	}
+	host, port, err := net.SplitHostPort(spec)
+	if err != nil {
+		panic(spec)
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		panic(spec)
+	}
+	t.Host, t.Port = host, int32(p)
+	return t
+}
+
+func targetsOf(specs ...string) []*tun.EdgeTarget {
+	out := make([]*tun.EdgeTarget, 0, len(specs))
+	for _, s := range specs {
+		out = append(out, target(s))
+	}
+	return out
+}
+
 func tcpSite(id, domain string, port int, lb tun.EdgeLbAlgorithm, targets ...string) *tun.EdgeDomain {
 	return &tun.EdgeDomain{DomainId: id, Domain: domain, Kind: tun.EdgeDomainKind_EDGE_DOMAIN_KIND_SITE, Enabled: true,
 		PortForwards: []*tun.EdgePortForward{{ForwardId: "f", ListenPort: int32(port), Protocol: tun.EdgeProtocol_EDGE_PROTOCOL_TCP,
 			Mode: tun.EdgeForwardMode_EDGE_FORWARD_MODE_PASSTHROUGH, TargetKind: tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS,
-			Targets: targets, Lb: lb, Enabled: true}}}
+			Targets: targetsOf(targets...), Lb: lb, Enabled: true}}}
 }
 
 func localAddr(port int) string { return "127.0.0.1:" + strconv.Itoa(port) }

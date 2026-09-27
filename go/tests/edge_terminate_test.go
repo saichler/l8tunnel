@@ -38,7 +38,7 @@ func newTerminateEdge(t *testing.T, scheme tun.EdgeBackendScheme, skipVerify boo
 	e.Apply([]*tun.EdgeDomain{{DomainId: "t", Domain: terminateDomain, Kind: tun.EdgeDomainKind_EDGE_DOMAIN_KIND_SITE, Enabled: true,
 		PortForwards: []*tun.EdgePortForward{{ForwardId: "f", ListenPort: int32(port), Protocol: tun.EdgeProtocol_EDGE_PROTOCOL_TLS,
 			Mode: tun.EdgeForwardMode_EDGE_FORWARD_MODE_TERMINATE, TargetKind: tun.EdgeTargetKind_EDGE_TARGET_KIND_TARGETS,
-			Targets: targets, Lb: tun.EdgeLbAlgorithm_EDGE_LB_ALGORITHM_ROUND_ROBIN, BackendScheme: scheme, SkipVerify: skipVerify,
+			Targets: targetsOf(targets...), Lb: tun.EdgeLbAlgorithm_EDGE_LB_ALGORITHM_ROUND_ROBIN, BackendScheme: scheme, SkipVerify: skipVerify,
 			Enabled: true}}}}, 1)
 	return &terminateEdge{port: port, pki: pki, e: e}
 }
