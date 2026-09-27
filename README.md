@@ -80,6 +80,27 @@ allow it on the token (`l8tunnel-server token create --name t --domains
 '*.example.com'`), and add `domains: [app.example.com]` to an http or tls
 tunnel. With ACME the relay gets its certificate on first use.
 
+**Wildcard domains:** a tls tunnel may also claim `*.<domain>`, sending
+every name under it (at any depth) to the machine, which serves its own
+certificate for them:
+
+```yaml
+  - name: ci-base
+    type: tls
+    target: 127.0.0.1:443
+    domains: [ci-base.hakudo.net, "*.ci1.ci-base.hakudo.net"]   # quote the *
+```
+
+- DNS: a wildcard record (`*.ci1.ci-base.hakudo.net CNAME ci-base.hakudo.net`)
+  pointing at the relay.
+- Token: allow the wildcard itself, e.g. `--domains '*.ci1.ci-base.hakudo.net'`
+  (a pattern such as `*.hakudo.net` also covers it).
+- The closest owner wins: an exact domain, or a narrower wildcard, beats a
+  broader wildcard. The wildcard doesn't cover its parent: add
+  `ci1.ci-base.hakudo.net` separately if it should route too.
+- http tunnels refuse wildcards (the relay would need a wildcard
+  certificate); use tls and terminate on the machine.
+
 A disconnected agent's names and ports stay reserved for its token for 5
 minutes, so URLs survive restarts; `l8tunnel-server reservation add` makes
 that permanent.
