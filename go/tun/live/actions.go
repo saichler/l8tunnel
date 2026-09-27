@@ -23,11 +23,14 @@ func (h *ClaimHandler) Post(elems ifs.IElements, vnic ifs.IVNic) ifs.IElements {
 	if !ok {
 		return object.NewError("invalid TunClaimRequest")
 	}
-	if req.Kind != tun.TunClaimKind_TUN_CLAIM_KIND_CLAIM {
+	dir := h.Arg(1).(*directory)
+	switch req.Kind {
+	case tun.TunClaimKind_TUN_CLAIM_KIND_CLAIM:
+		dir.refreshForClaim(vnic)
+	case tun.TunClaimKind_TUN_CLAIM_KIND_ANNOUNCE:
+	default:
 		return object.New(nil, h.Arg(0).(*claims.Engine).Handle(req))
 	}
-	dir := h.Arg(1).(*directory)
-	dir.refreshForClaim(vnic)
 	resp := h.Arg(0).(*claims.Engine).Handle(req)
 	// Reserve the assigned ports in the background: the claim doesn't wait
 	// on the backend.

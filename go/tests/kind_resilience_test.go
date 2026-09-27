@@ -222,4 +222,21 @@ func TestKindAssignedPortsAreReserved(t *testing.T) {
 	if got := a2.agent.Endpoints()[0].GetPublicPort(); got != port {
 		t.Fatalf("after the restarts the tunnel got port %d, want its reserved %d", got, port)
 	}
+
+	// A connected tunnel without a reservation (e.g. from before this
+	// feature) gets one when its relay announces it to a restarted registry.
+	if err := c.remove(common.AreaAccess, common.ReservationService, "TunReservation", "name="+nameB); err != nil {
+		t.Fatal(err)
+	}
+	portB := b.agent.Endpoints()[0].GetPublicPort()
+	kubectl(t, "delete", "pod", "l8tunnel-registry-0", "--wait=true")
+	kubectl(t, "wait", "--for=condition=Ready", "pod/l8tunnel-registry-0", "--timeout=120s")
+	c = newKindClient(t, "admin", "admin")
+	waitUntil(t, 60*time.Second, "the announced tunnel's port reserved", func() bool {
+		list := &tun.TunReservationList{}
+		if err := c.query(common.AreaAccess, common.ReservationService, "select * from TunReservation where name="+nameB, list); err != nil {
+			return false
+		}
+		return len(list.List) == 1 && list.List[0].PublicPort == int32(portB) && list.List[0].TokenId == tokB.TokenId
+	})
 }
