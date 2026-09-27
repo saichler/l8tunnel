@@ -123,6 +123,7 @@
             },
             onSave: () => {
                 Layer8MPopup.close();
+                if (svc.model === 'EdgeDomain') return domainForm(svc, record);
                 Layer8MNavCrud.openServiceForm(svc, def, record);
             }
         });
@@ -183,10 +184,64 @@
         }
     }
 
+    // domainData puts the mobile form's values in the types the server
+    // takes, as desktop's form sends them: l8ui's mobile forms return
+    // selects as strings, a file field as {__storagePath}, and read-only
+    // fields too, and the server rejects the first two.
+    function domainData(form, data) {
+        form.sections.forEach(section => section.fields.forEach(field => {
+            const v = data[field.key];
+            if (field.readOnly) {
+                delete data[field.key];
+            } else if (field.type === 'select') {
+                data[field.key] = Number(v) || 0;
+            } else if (field.type === 'file') {
+                data[field.key] = v && typeof v === 'object' ? (v.__storagePath || '') : (v || '');
+            }
+        }));
+        return data;
+    }
+
+    // domainForm is l8ui's mobile add/edit form (record null adds) with the
+    // save going through domainData.
+    function domainForm(svc, record) {
+        const form = record ? formDef(svc, record) : TunEdge.forms.EdgeDomain;
+        const M = Layer8MForms;
+        Layer8MPopup.show({
+            title: record ? 'Edit Domain' : 'Add Domain',
+            content: M.renderForm(form, record || {}),
+            size: 'large',
+            saveButtonText: record ? 'Update' : 'Create',
+            onShow: (popup) => M.initFormFields(popup.body, form),
+            onSave: async (popup) => {
+                const errors = M.validateForm(popup.body);
+                if (errors.length > 0) return M.showErrors(popup.body, errors);
+                const data = domainData(form, M.getFormData(popup.body));
+                const url = Layer8MConfig.resolveEndpoint(svc.endpoint);
+                try {
+                    if (record) {
+                        data.domainId = record.domainId;
+                        await Layer8MAuth.put(url, data);
+                    } else {
+                        await Layer8MAuth.post(url, data);
+                    }
+                    Layer8MUtils.showSuccess(record ? 'Domain updated' : 'Domain created');
+                    Layer8MPopup.close();
+                    if (activeTable()) activeTable().refresh();
+                } catch (e) {
+                    Layer8MUtils.showError('Saving the domain failed: ' + e.message);
+                }
+            }
+        });
+    }
+
     async function editDomain(id, item) {
         const svc = service('domains');
-        const record = await Layer8MNavCrud.fetchRecord(svc, id);
-        Layer8MNavCrud.openServiceForm(svc, formDef(svc, record), record || item);
+        domainForm(svc, (await Layer8MNavCrud.fetchRecord(svc, id)) || item);
+    }
+
+    function addDomain() {
+        domainForm(service('domains'), null);
     }
 
     async function deleteDomain(id, item) {
@@ -228,7 +283,7 @@
     window.TunMobile = {
         details: details, openRecord: openRecord,
         issueToken: issueToken, revokeToken: revokeToken,
-        editDomain: editDomain, deleteDomain: deleteDomain
+        editDomain: editDomain, addDomain: addDomain, deleteDomain: deleteDomain
     };
     window.TunRouterPortsM = routerPorts;
 })();

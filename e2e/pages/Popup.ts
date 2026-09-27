@@ -17,6 +17,14 @@ export class Popup {
         if (title) await expect(this.title()).toHaveText(title);
     }
 
+    /**
+     * Waits for the popup to focus its first input, which it does 100 ms
+     * after opening: typing before that can land in that input instead.
+     */
+    async waitForFocus(): Promise<void> {
+        await expect(this.root().locator('input:focus, select:focus, textarea:focus')).toHaveCount(1);
+    }
+
     async close(): Promise<void> {
         await this.root().locator('.probler-popup-close').click();
     }

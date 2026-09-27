@@ -382,10 +382,12 @@ reverse-proxies HTTP, balancing each request, with WebSockets and
 list (host, port, weight, disabled), every A record of a DNS name, or the
 edge's own node. Several targets are balanced with round robin (weighted),
 least connections, source hash or random, with optional TCP/HTTP/HTTPS
-health checks that take a failing target out. The UI's port forward table
-edits the protocol and ports (a new forward goes to this node); the
-targets and balancing settings are set through the API
-(`/tun/41/EdgeDomain`) for now.
+health checks that take a failing target out. In the UI, the Port
+forwarding tab lists each forward's protocol and ports; a forward's Add,
+Edit and detail open its **Port forward** popup, with the mode, the
+**Targets** table (host, port, weight, disabled), the balancing algorithm
+and the health check. With no targets, a forward goes to its To port on
+the edge's own node.
 
 **When the registry is down:** the edge and the relays route from their
 last copy of the live tables, so established and new connections to known

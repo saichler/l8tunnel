@@ -61,6 +61,10 @@ test('the guide opens, with its topics and the cluster\'s domain', async ({ app,
     const reach = topics.filter({ hasText: 'Reach a machine' });
     await reach.locator('> summary').click();
     await expect(reach.locator('.tun-guide-code').first()).toContainText(`<user>@${ENV.tunnelBase}`);
+    const lb = topics.filter({ hasText: 'Load balancing' });
+    await lb.locator('> summary').click();
+    await expect(lb).toContainText('Targets');
+    await expect(lb).toContainText('least connections');
     assertNoPageErrors(capture);
 });
 

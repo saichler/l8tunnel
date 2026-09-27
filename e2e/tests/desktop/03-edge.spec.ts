@@ -27,13 +27,15 @@ test('a site with a TCP port forward is bound by the edge, and removed', async (
 
     const popup = new Popup(app);
     await popup.waitForOpen();
+    await popup.waitForFocus();
     await popup.field('domain').fill(domain);
     await popup.field('kind').selectOption({ label: 'Site' });
     await popup.field('enabled').check(); // a new domain starts disabled
     await popup.tab('Port forwarding').click();
     await popup.root().locator('[data-inline-table="portForwards"] [data-action="add-row"]').click();
-    const row = new Popup(app); // the row form stacks on top
-    await expect(row.title()).toHaveText(/Port forwards/);
+    const row = new Popup(app); // the Port forward popup stacks on top
+    await expect(row.title()).toHaveText(/Add Port forward/);
+    await row.waitForFocus();
     await row.field('protocol').selectOption({ label: 'TCP' });
     await row.field('listenPort').fill(String(port));
     await row.field('targetPort').fill('5432');

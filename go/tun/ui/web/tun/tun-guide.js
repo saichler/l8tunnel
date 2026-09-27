@@ -80,6 +80,17 @@
                 '<p><b>Edge &gt; Domains</b> puts other sites behind the edge, besides the tunnels: a domain with its certificate and ' +
                 '<b>port forwards</b> (protocol, in port, to port). Tick <b>Enabled</b> on a new domain to put it in service. ' +
                 '<b>Edge &gt; Router ports</b> shows every port the edge listens on and whether it could bind it.</p>') +
+            topic('Load balancing',
+                '<p>The edge routes each connection to a domain\'s port forward (by name for HTTPS and HTTP, by port for TCP), then ' +
+                'balances it over that forward\'s targets. In <b>Edge &gt; Domains</b>, open a domain\'s <b>Port forwarding</b> tab and ' +
+                'add or edit a forward:</p><ul>' +
+                '<li><b>Targets</b>: the backends, each a host, a port, a <b>weight</b> (its share of the traffic; 0 counts as 1) and ' +
+                '<b>Disabled</b> to take it out without deleting it. With no targets, the forward goes to <b>To port</b> on the edge\'s own node.</li>' +
+                '<li><b>Balancing</b>: round robin (weighted), least connections, source hash (a client keeps its backend) or random.</li>' +
+                '<li><b>Health check</b>: TCP, HTTP or HTTPS (with a path); a target that fails 3 checks gets no traffic until it passes 2.</li>' +
+                '<li><b>Mode</b>: <b>Passthrough</b> balances each connection and leaves TLS to the backends; <b>Terminate</b> decrypts with ' +
+                'the domain\'s certificate and balances each HTTP request (set the backend scheme, and skip verification only for ' +
+                'self-signed backends).</li></ul>') +
             topic('Alerts',
                 '<p><b>Alerts &gt; Rules</b> notifies you (webhook, Slack, email, PagerDuty) when a relay is lost, no relay is ready, an edge ' +
                 'backend is down, a certificate is about to expire, or a given token or agent goes offline. <b>Deliveries</b> lists what was sent.</p>') +

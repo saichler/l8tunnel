@@ -15,6 +15,7 @@ test('create and delete an alert rule', async ({ app, api, capture }) => {
         await table.addButton().click();
         const popup = new Popup(app);
         await popup.waitForOpen();
+        await popup.waitForFocus();
         await popup.field('name').fill(name);
         await popup.field('condition').selectOption({ label: 'Certificate expiring' });
         await popup.field('threshold').fill('14');
@@ -24,6 +25,7 @@ test('create and delete an alert rule', async ({ app, api, capture }) => {
         await popup.root().locator('[data-action="add-row"]').click();
         const target = new Popup(app);
         await expect(target.title()).toHaveText(/Notification Targets/);
+        await target.waitForFocus();
         await target.field('channel').selectOption({ label: 'Webhook' });
         await target.field('endpoint').fill('https://hooks.example.test/e2e');
         await target.root().locator('.probler-popup-footer button', { hasText: 'Add' }).click();

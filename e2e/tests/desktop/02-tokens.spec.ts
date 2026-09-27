@@ -69,6 +69,7 @@ test('reserve a name for a token through the reference picker', async ({ app, ap
     await table.addButton().click();
     const popup = new Popup(app);
     await popup.waitForOpen();
+    await popup.waitForFocus();
     await popup.field('name').fill(name);
     await popup.field('tokenId').click();
     await new ReferencePicker(app).choose(tokName, tok.tokenId);

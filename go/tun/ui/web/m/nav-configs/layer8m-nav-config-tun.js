@@ -64,6 +64,7 @@
             edge: [
                 s('domains', 'Domains', '/41/EdgeDomain', 'EdgeDomain', 'domainId', {
                     onRowClick: details('domains'),
+                    onAdd: () => TunMobile.addDomain(),
                     onEdit: (id, item) => TunMobile.editDomain(id, item),
                     onDelete: (id, item) => TunMobile.deleteDomain(id, item)
                 }),

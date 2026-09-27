@@ -8,10 +8,11 @@
     const ro = TunForms.readOnly;
     const e = TunEdge.enums;
 
-    // One port forward: the protocol, the incoming port and the port it
-    // forwards to. A new forward gets the rest from the backend (an ID,
-    // passthrough, this node as the target, enabled); the other settings
-    // stay hidden, and the row editors keep them on existing forwards.
+    // The port forwards table: the protocol, the incoming port and the port
+    // it forwards to. A forward's Add, Edit and detail open the Port forward
+    // popup (tun/edge/edge-forward-popup.js), which edits the rest: the
+    // mode, the targets and the balancing. A new forward gets an ID and
+    // defaults from the backend.
     const hidden = (key) => ({ key: key, hidden: true });
     const forwardColumns = [
         { key: 'protocol', label: 'Protocol', type: 'select', options: e.FORWARD_PROTOCOL, required: true },
@@ -20,6 +21,10 @@
         ...['forwardId', 'listenPortEnd', 'mode', 'targetKind', 'targets', 'targetDns', 'lb', 'backendScheme',
             'skipVerify', 'proxyProtocol', 'healthType', 'healthPath', 'healthInterval', 'enabled', 'note'].map(hidden)
     ];
+
+    // The port forwards table: tun/edge/edge-forward-popup.js re-renders it
+    // after its popup saves a forward.
+    TunEdge.forwardsField = { key: 'portForwards', label: 'Port forwards', type: 'inlineTable', columns: forwardColumns };
 
     const certificateSection = () => f.section('Certificate', [
         ...f.file('certStoragePath', 'Certificate chain (PEM)'),
