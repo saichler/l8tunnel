@@ -63,3 +63,23 @@ test('the guide opens, with its topics and the cluster\'s domain', async ({ app,
     await expect(reach.locator('.tun-guide-code').first()).toContainText(`<user>@${ENV.tunnelBase}`);
     assertNoPageErrors(capture);
 });
+
+test('the whole guide can be reached (the dashboard scrolls)', async ({ app }) => {
+    const guide = app.locator('details.tun-guide');
+    await guide.locator('> summary').click();
+    // Scroll as a user does, with the wheel (a script can scroll even a
+    // clipped box, so scrollIntoView would prove nothing).
+    // hover() would scroll the guide into view by script; move the mouse
+    // over the KPIs instead (boundingBox doesn't scroll).
+    const box = await app.locator('#tun-dashboard-kpis').boundingBox();
+    await app.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    for (let i = 0; i < 10; i++) await app.mouse.wheel(0, 600);
+    // Hit-test its centre: clipped content isn't hit, while toBeInViewport
+    // only compares positions.
+    const reachable = await guide.locator('details.tun-guide-topic').last().evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + Math.min(r.height, 20) / 2);
+        return !!hit && el.contains(hit);
+    });
+    expect(reachable, 'the last guide topic is clipped: the dashboard doesn\'t scroll').toBe(true);
+});

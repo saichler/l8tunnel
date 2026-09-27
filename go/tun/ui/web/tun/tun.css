@@ -144,3 +144,8 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
+/* The dashboard grows past the window (downloads, guide): it scrolls,
+   unlike the table sections, whose tables scroll themselves. */
+.tun-dashboard-content {
+    overflow-y: auto;
+}
