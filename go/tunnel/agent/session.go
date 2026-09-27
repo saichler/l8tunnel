@@ -69,6 +69,16 @@ func (a *Agent) runSession(ctx context.Context) (registered bool, err error) {
 		end.set(a.heartbeat(control, mux, interval, &lastPong))
 		mux.Close()
 	}()
+	done := make(chan struct{})
+	defer close(done)
+	if ip := localIP(conn); ip != nil {
+		go func() {
+			if err := a.watchAddress(ip, done); err != nil {
+				end.set(err)
+				mux.Close()
+			}
+		}()
+	}
 
 	var streams sync.WaitGroup
 	for {

@@ -95,10 +95,15 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 		wait := jitter(delay)
 		a.log.Warn("relay session ended, reconnecting", "error", err, "in", wait.String())
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(wait):
+		changed, werr := a.waitToReconnect(ctx, wait)
+		if werr != nil {
+			return werr
+		}
+		if changed {
+			// A new network: try it now, and back off from the start.
+			a.log.Info("network changed, reconnecting now")
+			delay = a.cfg.ReconnectMin
+			continue
 		}
 		delay = min(delay*2, a.cfg.ReconnectMax)
 	}

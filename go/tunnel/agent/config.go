@@ -121,6 +121,14 @@ type Config struct {
 	// means DefaultReconnectMin / DefaultReconnectMax.
 	ReconnectMin time.Duration
 	ReconnectMax time.Duration
+	// NetworkCheckInterval is how often the agent checks whether its
+	// network changed (the relay connection's local address is gone, or,
+	// while it waits to reconnect, the machine's addresses changed); zero
+	// means DefaultNetworkCheckInterval.
+	NetworkCheckInterval time.Duration
+	// LocalAddrs lists this machine's addresses; nil means
+	// net.InterfaceAddrs. Tests replace it to simulate a network change.
+	LocalAddrs func() ([]net.Addr, error)
 	// Logger receives the agent's logs; nil means slog.Default().
 	Logger *slog.Logger
 }
@@ -192,6 +200,15 @@ func (c *Config) validate() error {
 	}
 	if c.ReconnectMax == 0 {
 		c.ReconnectMax = DefaultReconnectMax
+	}
+	if c.NetworkCheckInterval == 0 {
+		c.NetworkCheckInterval = DefaultNetworkCheckInterval
+	}
+	if c.NetworkCheckInterval < 0 {
+		return fmt.Errorf("agent: invalid network check interval %s", c.NetworkCheckInterval)
+	}
+	if c.LocalAddrs == nil {
+		c.LocalAddrs = net.InterfaceAddrs
 	}
 	if c.ReconnectMin < 0 || c.ReconnectMin > c.ReconnectMax {
 		return fmt.Errorf("agent: invalid reconnect backoff %s-%s", c.ReconnectMin, c.ReconnectMax)
