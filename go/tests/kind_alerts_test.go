@@ -52,12 +52,15 @@ func TestKindAlertsFire(t *testing.T) {
 	want := map[string]string{"cert": kindBase, "listener": "port 5443 for " + busy.Domain}
 	records := map[string]*l8notify.NotifyRecord{}
 	waitUntil(t, 150*time.Second, "alerts delivered", func() bool {
-		list := &l8notify.NotifyRecordList{}
-		if err := c.query(notifyArea, "Notify", "select * from NotifyRecord", list); err != nil {
-			return false
-		}
-		for _, rec := range list.List {
-			for key, id := range ids {
+		// Filter on each rule's subject: an unfiltered query returns only the
+		// first page, and the delivery log keeps growing.
+		for key, id := range ids {
+			list := &l8notify.NotifyRecordList{}
+			q := "select * from NotifyRecord where subject='l8tunnel alert: " + rules[key].Name + "'"
+			if err := c.query(notifyArea, "Notify", q, list); err != nil {
+				return false
+			}
+			for _, rec := range list.List {
 				if rec.Attributes["ruleId"] == id {
 					records[key] = rec
 				}
