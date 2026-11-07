@@ -4,6 +4,7 @@
 #   l8tunnel-cluster    forward-key (signs PROXY headers between the edge and
 #                       relays) and gateway-host-key (the SSH gateway's host
 #                       key, the same on every relay)
+#   harbor-pull         pulls the images from the private Harbor project
 # An existing Secret is never replaced (except the CA, when a directory is
 # given): relays and agents depend on them staying the same.
 #
@@ -40,6 +41,29 @@ else
   ssh-keygen -q -t ed25519 -N "" -C "l8tunnel gateway" -f "$TMP/gateway-host-key"
   "${KUBECTL[@]}" -n l8tunnel create secret generic l8tunnel-cluster \
     --from-file=forward-key="$TMP/forward-key" --from-file=gateway-host-key="$TMP/gateway-host-key"
+fi
+
+# harbor-pull: credentials to pull the l8tunnel images from the private
+# Harbor project (registry.layer-8.dev:44443/l8tunnel). They come from
+# l8secure's harbor/harbor.yaml.b64 (base64 YAML: registry, username,
+# password); HARBOR_CREDS points at another copy of that file.
+if "${KUBECTL[@]}" -n l8tunnel get secret harbor-pull >/dev/null 2>&1; then
+  echo "Secret harbor-pull already exists; keeping it."
+else
+  HARBOR_CREDS="${HARBOR_CREDS:-$(cd "$(dirname "$0")" && pwd)/../../l8secure/harbor/harbor.yaml.b64}"
+  [ -f "$HARBOR_CREDS" ] || { echo "missing $HARBOR_CREDS (set HARBOR_CREDS to l8secure/harbor/harbor.yaml.b64)"; exit 1; }
+  HARBOR_YAML="$(base64 -d "$HARBOR_CREDS")"
+  harbor_get() { printf '%s\n' "$HARBOR_YAML" | sed -n "s/^$1:[[:space:]]*//p" | head -n1; }
+  REGISTRY="$(harbor_get registry)"
+  USERNAME="$(harbor_get username)"
+  PASSWORD="$(harbor_get password)"
+  if [ -z "$REGISTRY" ] || [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
+    echo "$HARBOR_CREDS must contain registry, username and password"
+    exit 1
+  fi
+  echo "Creating the Harbor pull secret for $REGISTRY..."
+  "${KUBECTL[@]}" -n l8tunnel create secret docker-registry harbor-pull \
+    --docker-server="$REGISTRY" --docker-username="$USERNAME" --docker-password="$PASSWORD"
 fi
 
 if [ -z "$CA_DIR" ] && "${KUBECTL[@]}" -n l8tunnel get secret l8tunnel-agent-ca >/dev/null 2>&1; then

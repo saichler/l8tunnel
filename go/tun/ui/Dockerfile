@@ -1,4 +1,4 @@
-FROM saichler/builder:latest AS build
+FROM builder:latest AS build
 
 # Populated by buildx from --platform (blank = the host's).
 ARG TARGETOS=linux
@@ -10,7 +10,7 @@ RUN go mod init
 RUN GOPROXY=direct GOPRIVATE=github.com go mod tidy
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o l8tunnelweb
 
-FROM saichler/l8tunnel-security:latest AS final
+FROM l8tunnel-security:latest AS final
 COPY --from=build /home/src/github.com/saichler/build/l8tunnelweb /home/run/l8tunnelweb
 COPY ./web /home/run/web
 WORKDIR /home/run

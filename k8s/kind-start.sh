@@ -60,14 +60,14 @@ kind create cluster --name "${CLUSTER_NAME}" --config "${SCRIPT_DIR}/${KIND_CONF
 
 echo "Loading images into KIND..."
 IMAGES=(
-  saichler/l8tunnel-vnet:latest
-  saichler/l8tunnel-log-vnet:latest
-  saichler/l8tunnel-log-agent:latest
-  saichler/l8tunnel:latest
-  saichler/l8tunnel-web:latest
-  saichler/l8tunnel-registry:latest
-  saichler/l8tunnel-relay:latest
-  saichler/l8tunnel-edge:latest
+  registry.layer-8.dev:44443/l8tunnel/l8tunnel-vnet:latest
+  registry.layer-8.dev:44443/l8tunnel/l8tunnel-log-vnet:latest
+  registry.layer-8.dev:44443/l8tunnel/l8tunnel-log-agent:latest
+  registry.layer-8.dev:44443/l8tunnel/l8tunnel:latest
+  registry.layer-8.dev:44443/l8tunnel/l8tunnel-web:latest
+  registry.layer-8.dev:44443/l8tunnel/l8tunnel-registry:latest
+  registry.layer-8.dev:44443/l8tunnel/l8tunnel-relay:latest
+  registry.layer-8.dev:44443/l8tunnel/l8tunnel-edge:latest
 )
 for img in "${IMAGES[@]}"; do
   if docker image inspect "$img" &>/dev/null; then

@@ -8,4 +8,4 @@ case "$1" in
     "") PLATFORM=linux/amd64,linux/arm64 ;;
     *) echo "Usage: $0 [amd64|arm64]"; exit 1 ;;
 esac
-docker buildx build --no-cache --platform=$PLATFORM -t saichler/l8tunnel-relay:latest --push .
+docker buildx build --no-cache --platform=$PLATFORM -t registry.layer-8.dev:44443/l8tunnel/l8tunnel-relay:latest --push .

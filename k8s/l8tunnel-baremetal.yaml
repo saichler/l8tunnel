@@ -81,9 +81,11 @@ spec:
                 matchLabels:
                   app: l8tunnel-vnet
               topologyKey: kubernetes.io/hostname
+      imagePullSecrets:
+        - name: harbor-pull
       containers:
         - name: l8tunnel-vnet
-          image: "saichler/l8tunnel-vnet:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel-vnet:latest"
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 29000
@@ -142,9 +144,11 @@ spec:
                 matchLabels:
                   app: l8tunnel-log-vnet
               topologyKey: kubernetes.io/hostname
+      imagePullSecrets:
+        - name: harbor-pull
       containers:
         - name: l8tunnel-log-vnet
-          image: "saichler/l8tunnel-log-vnet:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel-log-vnet:latest"
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 29010
@@ -203,9 +207,11 @@ spec:
                 matchLabels:
                   app: l8tunnel-log-agent
               topologyKey: kubernetes.io/hostname
+      imagePullSecrets:
+        - name: harbor-pull
       containers:
         - name: l8tunnel-log-agent
-          image: "saichler/l8tunnel-log-agent:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel-log-agent:latest"
           imagePullPolicy: IfNotPresent
           env:
             - name: LOGPATH
@@ -257,9 +263,11 @@ spec:
         app: l8tunnel
     spec:
       hostNetwork: true
+      imagePullSecrets:
+        - name: harbor-pull
       containers:
         - name: l8tunnel
-          image: "saichler/l8tunnel:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel:latest"
           imagePullPolicy: IfNotPresent
           env:
             - name: NODE_IP
@@ -333,9 +341,11 @@ spec:
                 matchLabels:
                   app: l8tunnel-web
               topologyKey: kubernetes.io/hostname
+      imagePullSecrets:
+        - name: harbor-pull
       containers:
         - name: l8tunnel-web
-          image: "saichler/l8tunnel-web:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel-web:latest"
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5443
@@ -387,9 +397,11 @@ spec:
         app: l8tunnel-registry
     spec:
       hostNetwork: true
+      imagePullSecrets:
+        - name: harbor-pull
       containers:
         - name: l8tunnel-registry
-          image: "saichler/l8tunnel-registry:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel-registry:latest"
           imagePullPolicy: IfNotPresent
           env:
             - name: NODE_IP
@@ -457,9 +469,11 @@ spec:
                   matchLabels:
                     app: l8tunnel-relay
                 topologyKey: kubernetes.io/hostname
+      imagePullSecrets:
+        - name: harbor-pull
       containers:
         - name: l8tunnel-relay
-          image: "saichler/l8tunnel-relay:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel-relay:latest"
           imagePullPolicy: IfNotPresent
           ports:
             - name: tls
@@ -634,9 +648,11 @@ spec:
                 matchLabels:
                   app: l8tunnel-edge
               topologyKey: kubernetes.io/hostname
+      imagePullSecrets:
+        - name: harbor-pull
       containers:
         - name: l8tunnel-edge
-          image: "saichler/l8tunnel-edge:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel-edge:latest"
           imagePullPolicy: IfNotPresent
           env:
             - name: NODE_IP

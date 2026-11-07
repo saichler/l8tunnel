@@ -19,4 +19,4 @@ rm -rf "$DL" && mkdir -p "$DL"
 cp ../../../dist/l8tunnel-agent-download-"$(git describe --tags --always --dirty)"-linux-amd64.tar.gz "$DL/l8tunnel-agent-linux-amd64.tar.gz"
 cp ../../../dist/l8tunnel-agent-download-"$(git describe --tags --always --dirty)"-darwin-arm64.tar.gz "$DL/l8tunnel-agent-darwin-arm64.tar.gz"
 
-docker buildx build --no-cache --platform=$PLATFORM -t saichler/l8tunnel-web:latest --push .
+docker buildx build --no-cache --platform=$PLATFORM -t registry.layer-8.dev:44443/l8tunnel/l8tunnel-web:latest --push .

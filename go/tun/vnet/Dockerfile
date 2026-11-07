@@ -1,4 +1,4 @@
-FROM saichler/builder:latest AS build
+FROM builder:latest AS build
 
 # Populated by buildx from --platform (blank = the host's).
 ARG TARGETOS=linux
@@ -16,7 +16,7 @@ RUN /patch.sh
 WORKDIR /home/src/github.com/saichler/build
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o l8tunnelvnet
 
-FROM saichler/l8tunnel-security:latest AS final
+FROM l8tunnel-security:latest AS final
 COPY --from=build /home/src/github.com/saichler/build/l8tunnelvnet /home/run/l8tunnelvnet
 RUN mkdir -p /data
 RUN chmod 777 /data

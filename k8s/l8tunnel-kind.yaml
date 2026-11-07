@@ -74,7 +74,7 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
         - name: l8tunnel-vnet
-          image: "saichler/l8tunnel-vnet:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel-vnet:latest"
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 29000
@@ -135,7 +135,7 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
         - name: l8tunnel-log-vnet
-          image: "saichler/l8tunnel-log-vnet:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel-log-vnet:latest"
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 29010
@@ -196,7 +196,7 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
         - name: l8tunnel-log-agent
-          image: "saichler/l8tunnel-log-agent:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel-log-agent:latest"
           imagePullPolicy: IfNotPresent
           env:
             - name: LOGPATH
@@ -250,7 +250,7 @@ spec:
       hostNetwork: true
       containers:
         - name: l8tunnel
-          image: "saichler/l8tunnel:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel:latest"
           imagePullPolicy: IfNotPresent
           env:
             - name: NODE_IP
@@ -326,7 +326,7 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
         - name: l8tunnel-web
-          image: "saichler/l8tunnel-web:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel-web:latest"
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5443
@@ -380,7 +380,7 @@ spec:
       hostNetwork: true
       containers:
         - name: l8tunnel-registry
-          image: "saichler/l8tunnel-registry:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel-registry:latest"
           imagePullPolicy: IfNotPresent
           env:
             - name: NODE_IP
@@ -443,7 +443,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: l8tunnel-relay
-          image: "saichler/l8tunnel-relay:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel-relay:latest"
           imagePullPolicy: IfNotPresent
           ports:
             - name: tls
@@ -672,7 +672,7 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
         - name: l8tunnel-edge
-          image: "saichler/l8tunnel-edge:latest"
+          image: "registry.layer-8.dev:44443/l8tunnel/l8tunnel-edge:latest"
           imagePullPolicy: IfNotPresent
           env:
             - name: NODE_IP
